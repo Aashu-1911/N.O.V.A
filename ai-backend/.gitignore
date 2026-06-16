@@ -1,0 +1,97 @@
+# Virtual environments
+
+.venv/
+venv/
+env/
+
+# Python
+
+**pycache**/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# IDEs
+
+.vscode/
+.idea/
+
+# Environment variables
+
+.env
+.env.local
+
+# Database
+
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+
+*.log
+logs/
+
+# Temporary files
+
+temp/
+tmp/
+*.tmp
+
+# OS files
+
+.DS_Store
+Thumbs.db
+
+# Whisper models / AI artifacts
+
+models/
+downloads/
+
+# Audio recordings
+
+recordings/
+audio/
+*.wav
+*.mp3
+
+# Generated screenshots
+
+screenshots/
+*.png
+
+# Ollama / local AI configs
+
+ollama.log
+
+# Build artifacts
+
+build/
+dist/
+
+# Coverage
+
+.coverage
+htmlcov/
+
+# Jupyter
+
+.ipynb_checkpoints/
+
+# Playwright
+
+playwright-report/
+test-results/
+
+# Secrets
+
+secrets.json
+credentials.json
+
+# Windows
+
+desktop.ini

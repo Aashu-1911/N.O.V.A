@@ -1,0 +1,104 @@
+## Setup
+
+cd C:\Users\ashis\OneDrive\Desktop\Projects\Assistant\ai-backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+
+## Verify Ollama
+
+### Start Ollama:
+ollama serve
+
+### Check version:
+curl.exe http://localhost:11434/api/version
+
+### Check installed models:
+ollama list
+
+### Test model:
+python test.py
+
+
+## Run Backend
+cd ai-backend
+.\.venv\Scripts\Activate.ps1
+uvicorn main:app
+
+## Voice Commands
+
+### Start microphone listener:
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/voice/start
+
+### Check status:
+Invoke-RestMethod -Method Get `
+  -Uri http://127.0.0.1:8000/voice/status
+
+### Stop listener:
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/voice/stop
+
+
+## Othere commands
+
+Test Chat
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/chat `
+  -Body (@{message='Hello Jarvis'} | ConvertTo-Json) `
+  -ContentType 'application/json'
+Test Intent Detection
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/intent `
+  -Body (@{message='Add a task to learn Docker tomorrow'} | ConvertTo-Json) `
+  -ContentType 'application/json'
+Test Task Creation
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/voice/command `
+  -Body (@{message='Add a task to learn Docker tomorrow'} | ConvertTo-Json) `
+  -ContentType 'application/json'
+View Tasks
+Invoke-RestMethod -Method Get `
+  -Uri http://127.0.0.1:8000/tasks
+View Task Statistics
+Invoke-RestMethod -Method Get `
+  -Uri http://127.0.0.1:8000/tasks/stats
+Test Website Opening
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/voice/command `
+  -Body (@{message='Open YouTube'} | ConvertTo-Json) `
+  -ContentType 'application/json'
+
+Other examples:
+
+Open Google
+Open GitHub
+Open ChatGPT
+Test STT (Whisper)
+python test_voice.py
+
+Expected:
+
+VOICE_TEST_OK
+add a task to buy milk tomorrow
+Test TTS
+python test_tts.py
+
+Expected:
+
+TTS_TEST_OK
+Done task added.
+
+Direct speech test:
+
+python -c "from voice import speak; speak('Hello Ashish, text to speech is working')"
+Shutdown
+
+Stop microphone:
+
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8000/voice/stop
+
+Then stop backend:
+
+CTRL + C
