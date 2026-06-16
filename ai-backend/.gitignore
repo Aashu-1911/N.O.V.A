@@ -1,4 +1,4 @@
-# Virtual environments
+# Virtual Environments
 
 .venv/
 venv/
@@ -7,25 +7,25 @@ env/
 # Python
 
 **pycache**/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
 *.so
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+.coverage
+htmlcov/
 
 # IDEs
 
 .vscode/
 .idea/
 
-# Environment variables
+# Environment Variables
 
 .env
 .env.local
 
-# Database
+# Databases
 
 *.db
 *.sqlite
@@ -36,47 +36,42 @@ env/
 *.log
 logs/
 
-# Temporary files
+# Temporary Files
 
 temp/
 tmp/
 *.tmp
 
-# OS files
+# OS Files
 
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Whisper models / AI artifacts
+# AI Models / Downloads
 
 models/
 downloads/
 
-# Audio recordings
+# Audio Files
 
 recordings/
 audio/
 *.wav
 *.mp3
 
-# Generated screenshots
+# Screenshots
 
 screenshots/
-*.png
 
-# Ollama / local AI configs
+# Ollama
 
 ollama.log
 
-# Build artifacts
+# Build Artifacts
 
 build/
 dist/
-
-# Coverage
-
-.coverage
-htmlcov/
 
 # Jupyter
 
@@ -91,7 +86,3 @@ test-results/
 
 secrets.json
 credentials.json
-
-# Windows
-
-desktop.ini
