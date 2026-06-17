@@ -1,6 +1,7 @@
 import json
-from ollama_client import send_message
+import requests
 
+ROUTER_MODEL = "qwen2.5:1.5b"
 
 SYSTEM_PROMPT = """
 You are Jarvis's intent router.
@@ -15,6 +16,7 @@ update_task
 show_stats
 open_website
 open_application
+reminder
 general_chat
 
 Examples:
@@ -37,25 +39,58 @@ User: Open YouTube
     "website": "youtube"
   }
 }
+
+User: Remind me to call mom tomorrow
+
+{
+  "intent": "reminder",
+  "parameters": {
+    "task_name": "call mom",
+    "date": "tomorrow"
+  }
+}
+
+Always include:
+- intent
+- parameters
+
+Return JSON only.
 """
 
 
 def route_command(command: str):
+
     prompt = f"{SYSTEM_PROMPT}\n\nUser: {command}"
 
     try:
-        response = "".join(send_message(prompt, []))
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": ROUTER_MODEL,
+                "prompt": prompt,
+                "stream": False
+            },
+            timeout=30
+        )
 
-        start = response.find("{")
-        end = response.rfind("}") + 1
+        response.raise_for_status()
 
-        response = "".join(send_message(prompt, []))
+        data = response.json()
 
-        print("\nRAW RESPONSE:")
-        print(repr(response))
-        print()
-        
-        return json.loads(response[start:end])
+        raw_response = data.get("response", "").strip()
+
+        print("\n[ROUTER RAW]")
+        print(raw_response)
+
+        start = raw_response.find("{")
+        end = raw_response.rfind("}") + 1
+
+        if start == -1 or end <= 0:
+            raise ValueError("No JSON found")
+
+        json_text = raw_response[start:end]
+
+        return json.loads(json_text)
 
     except Exception as e:
         print("[ROUTER ERROR]", e)

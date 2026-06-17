@@ -9,6 +9,7 @@ KNOWN_WEBSITES = [
     "linkedin",
     "reddit",
     "codeforces",
+    "stackoverflow",
 ]
 
 def match_website(name: str):

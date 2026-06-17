@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from conversation import ConversationManager
 from ollama_client import send_message, parse_intent
+from intent_router import route_command
 from voice import speak
 
 from browser_manager import open_website
@@ -92,7 +93,18 @@ def _handle_voice_command(command: str) -> dict:
     memory.add_message("user", command)
 
     result = parse_intent(command)
-
+    
+    print(f"[PARSER] Confidence: {result['confidence']}")
+    if result["confidence"] < 0.7:
+        print("[ROUTER] Falling back to qwen2.5 router")
+        llm_result = route_command(command)
+        result = {
+            "intent": llm_result["intent"],
+            "entities": llm_result.get("parameters", {}),
+            "confidence": 1.0
+        }
+    print(f"[VOICE] Intent result: {result}")
+        
     intent = result["intent"]
     entities = result["entities"]
     print(f"[VOICE] Intent variable = {intent}")

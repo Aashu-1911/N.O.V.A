@@ -15,7 +15,7 @@ import re
 from collections import deque
 from typing import Deque, Dict, Generator, Iterable, List, Optional
 from urllib.parse import urlparse
-
+from entity_matcher import match_website
 import httpx
 
 
@@ -211,7 +211,31 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         ).strip(" .")
         entities["task_name"] = cleaned_task_name or task_name
 
-    return {"intent": intent, "entities": entities}
+    confidence = 0.5
+
+    if intent == "add_task" and entities.get("task_name"):
+        confidence = 0.9
+
+    elif intent == "complete_task" and entities.get("task_name"):
+        confidence = 0.9
+
+    elif intent == "update_task" and entities.get("task_name"):
+        confidence = 0.9
+
+    elif intent == "open_website" and entities.get("url"):
+        confidence = 0.9
+
+    elif intent == "show_stats":
+        confidence = 0.95
+
+    elif intent == "reminder" and entities.get("task_name"):
+        confidence = 0.9
+
+    return {
+        "intent": intent,
+        "entities": entities,
+        "confidence": confidence
+    }
 
 
 class OllamaClient:
