@@ -5,9 +5,10 @@ from ollama_client import send_message, parse_intent
 from intent_router import route_command
 from voice import speak
 
+from system_manager import lock_pc, take_screenshot
+
 from app_manager import load_start_menu_apps
 
-load_start_menu_apps()
 
 from app_manager import open_application
 from browser_manager import open_website
@@ -289,6 +290,47 @@ def _handle_voice_command(command: str) -> dict:
             "reply": reply
         }
     
+    #take screenshot
+    if intent == "take_screenshot":
+
+        path = take_screenshot()
+
+        reply = "Screenshot saved in your Screenshots folder."
+
+        memory.add_message("assistant", reply)
+        speak(reply)
+
+        return {
+            "status": "success",
+            "reply": reply
+        }
+    
+    # lock pc
+    # if intent == "lock_pc":
+
+    #     print("[SYSTEM] Lock PC intent triggered")
+
+    #     reply = "Locking computer."
+
+    #     memory.add_message("assistant", reply)
+    #     speak(reply)
+    #     print("[SYSTEM] About to call lock_pc()")
+
+    #     lock_pc()
+    #     print("[SYSTEM] lock_pc() finished")
+    #     return {
+    #         "status": "success",
+    #         "reply": reply
+    #     }
+    if intent == "lock_pc":
+        print("[SYSTEM] Lock PC intent triggered")
+
+        lock_pc()
+
+        return {
+            "status": "success"
+        }
+        
     # Fallback: ask the LLM for a reply and store it
     try:
         llm_reply = "".join(send_message(command, memory.get_history()))

@@ -245,7 +245,7 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         intent = "take_screenshot"
 
     elif re.search(
-        r"\b(lock computer|lock pc|lock system)\b",
+        r"\b(lock computer|lock pc|lock system|lock screen|lock my computer|lock my pc)\b",
         normalized
     ):
         intent = "lock_pc"
