@@ -95,12 +95,16 @@ def _handle_voice_command(command: str) -> dict:
     result = parse_intent(command)
     
     print(f"[PARSER] Confidence: {result['confidence']}")
-    if result["confidence"] < 0.7:
+    if result["confidence"] < 0.8:
         print("[ROUTER] Falling back to qwen2.5 router")
         llm_result = route_command(command)
+        entities = llm_result.get("parameters", {})
+
+        
+
         result = {
             "intent": llm_result["intent"],
-            "entities": llm_result.get("parameters", {}),
+            "entities": entities,
             "confidence": 1.0
         }
     print(f"[VOICE] Intent result: {result}")
@@ -170,15 +174,38 @@ def _handle_voice_command(command: str) -> dict:
         return {"status": "success", "intent": intent, "reply": reply, "stats": stats}
 
     if intent == "reminder":
-        reply = "Handled: reminder"
+        print("[REMINDER] Entered reminder block")
+        task_name = entities.get("task_name")
+
+        if not task_name:
+            reply = "I could not understand the reminder."
+
+            memory.add_message("assistant", reply)
+            speak(reply)
+
+            return {
+                "status": "error",
+                "intent": intent,
+                "reply": reply
+            }
+
+        task = add_task(
+            task_name,
+            entities.get("date"),
+            "reminder",
+            "medium"
+        )
+
+        reply = f"Reminder created for {task['task_name']}"
+
         memory.add_message("assistant", reply)
         speak(reply)
 
         return {
-            "status": "handled",
+            "status": "success",
             "intent": intent,
             "reply": reply,
-            "entities": entities
+            "task": task
         }
 
     if intent == "open_website":

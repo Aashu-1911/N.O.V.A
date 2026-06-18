@@ -33,10 +33,12 @@ User: Add a task to learn Docker tomorrow
 
 User: Open YouTube
 
+User: Open YouTube
+
 {
   "intent": "open_website",
   "parameters": {
-    "website": "youtube"
+    "url": "youtube"
   }
 }
 
