@@ -159,49 +159,116 @@ def _extract_task_name(text: str, intent: str) -> Optional[str]:
     return None
 
 
+KNOWN_APPS = [
+    "vs code",
+    "vscode",
+    "visual studio code",
+    "microsoft store",
+    "chrome",
+    "google chrome",
+    "edge",
+    "microsoft edge",
+    "firefox",
+    "discord",
+    "spotify",
+    "notepad",
+    "calculator",
+    "calc",
+    "cmd",
+    "command prompt",
+    "powershell",
+    "task manager",
+    "steam",
+]
+
+def _extract_application(text: str):
+    lower_text = text.lower()
+
+    for app in KNOWN_APPS:
+        if app in lower_text:
+            return app
+
+    return None
+
 def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     """
     Parse a user message into a lightweight intent + entities payload.
-
-    Returns:
-        {
-            "intent": "<intent_name>",
-            "entities": {
-                "task_name": ...,
-                "category": ...,
-                "priority": ...,
-                "url": ...,
-                "date": ...
-            }
-        }
     """
 
     normalized = text.strip().lower()
 
     intent = "answer_question"
-    if re.search(r"\b(complete|finish|done|mark done|mark as done|completed)\b", normalized):
+
+    if re.search(
+        r"\b(complete|finish|done|mark done|mark as done|completed)\b",
+        normalized
+    ):
         intent = "complete_task"
-    elif re.search(r"\b(update|edit|change|modify)\b", normalized):
+
+    elif re.search(
+        r"\b(update|edit|change|modify)\b",
+        normalized
+    ):
         intent = "update_task"
-    elif re.search(r"\b(add|create|new task|remember to|remind me to)\b", normalized):
+
+    elif re.search(
+        r"\b(add|create|new task|remember to|remind me to)\b",
+        normalized
+    ):
         intent = "add_task" if "remind me" not in normalized else "reminder"
-    elif re.search(r"\b(stats|statistics|progress|summary|status)\b", normalized):
+
+    elif re.search(
+        r"\b(stats|statistics|progress|summary|status)\b",
+        normalized
+    ):
         intent = "show_stats"
-    elif _extract_url(text) or re.search(r"\b(open|visit|website|site|browser)\b", normalized):
+        # print("[DEBUG APP]", _extract_application(text))
+    elif _extract_application(text):
+        intent = "open_application"
+
+    elif _extract_url(text) or re.search(
+        r"\b(open|visit|website|site|browser)\b",
+        normalized
+    ):
         intent = "open_website"
-    elif re.search(r"\b(remind|reminder)\b", normalized):
+
+    elif re.search(
+        r"\b(remind|reminder)\b",
+        normalized
+    ):
         intent = "reminder"
 
+    elif re.search(
+        r"\b(screenshot|screen shot|capture screen)\b",
+        normalized
+    ):
+        intent = "take_screenshot"
+
+    elif re.search(
+        r"\b(lock computer|lock pc|lock system)\b",
+        normalized
+    ):
+        intent = "lock_pc"
+
+    elif re.search(
+        r"\b(mute|unmute|volume up|volume down|increase volume|decrease volume)\b",
+        normalized
+    ):
+        intent = "volume_control"
+    
+    
     entities = {
         "task_name": _extract_task_name(text, intent),
         "category": _extract_category(text),
         "priority": _extract_priority(text),
         "url": _extract_url(text),
+        "app_name": _extract_application(text),
         "date": _extract_date(text),
     }
 
     task_name = entities.get("task_name")
     date_value = entities.get("date")
+
     if task_name and date_value:
         cleaned_task_name = re.sub(
             rf"\s*(?:on|by|for)?\s*{re.escape(date_value)}$",
@@ -209,6 +276,7 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
             task_name,
             flags=re.IGNORECASE,
         ).strip(" .")
+
         entities["task_name"] = cleaned_task_name or task_name
 
     confidence = 0.5
@@ -225,16 +293,28 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     elif intent == "open_website" and entities.get("url"):
         confidence = 0.9
 
+    elif intent == "open_application" and entities.get("app_name"):
+        confidence = 0.9
+
     elif intent == "show_stats":
         confidence = 0.95
 
     elif intent == "reminder" and entities.get("task_name"):
         confidence = 0.9
 
+    elif intent == "take_screenshot":
+        confidence = 0.95
+
+    elif intent == "lock_pc":
+        confidence = 0.95
+
+    elif intent == "volume_control":
+        confidence = 0.95
+        
     return {
         "intent": intent,
         "entities": entities,
-        "confidence": confidence
+        "confidence": confidence,
     }
 
 

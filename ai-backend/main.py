@@ -5,6 +5,11 @@ from ollama_client import send_message, parse_intent
 from intent_router import route_command
 from voice import speak
 
+from app_manager import load_start_menu_apps
+
+load_start_menu_apps()
+
+from app_manager import open_application
 from browser_manager import open_website
 from task_manager import (
     add_task,
@@ -97,7 +102,38 @@ def _handle_voice_command(command: str) -> dict:
     print(f"[PARSER] Confidence: {result['confidence']}")
     if result["confidence"] < 0.8:
         print("[ROUTER] Falling back to qwen2.5 router")
+        
         llm_result = route_command(command)
+        
+        KNOWN_WEBSITES = {
+            "youtube",
+            "github",
+            "google",
+            "linkedin",
+            "stackoverflow",
+            "chatgpt"
+        }
+
+        candidate = (
+            llm_result.get("parameters", {})
+            .get("url", "")
+            .lower()
+        )
+        
+        if (
+            llm_result["intent"] == "open_website"
+            and command.lower().startswith("open ")
+        ):
+            candidate = llm_result.get("parameters", {}).get("url")
+
+            if candidate and "." not in candidate:
+                llm_result = {
+                    "intent": "open_application",
+                    "parameters": {
+                        "app_name": candidate
+                    }
+                }
+        
         entities = llm_result.get("parameters", {})
 
         
@@ -223,6 +259,33 @@ def _handle_voice_command(command: str) -> dict:
         speak(reply)
         return {
             "status": "success",
+            "reply": reply
+        }
+        
+    
+    #open application
+    if intent == "open_application":
+
+        app_name = (
+            entities.get("app_name")
+            or entities.get("application")
+        )
+
+        print(f"[APP] Opening: {app_name}")
+
+        success = open_application(app_name)
+
+        if success:
+            reply = f"Opening {app_name}"
+        else:
+            reply = f"I could not find {app_name}"
+
+        memory.add_message("assistant", reply)
+        speak(reply)
+
+        return {
+            "status": "success" if success else "error",
+            "intent": intent,
             "reply": reply
         }
     
@@ -365,4 +428,7 @@ def voice_command(request: ChatRequest):
     result = _handle_voice_command(request.message)
     return result
 
-
+@app.on_event("startup")
+def startup_event():
+    load_start_menu_apps()
+    print("Application started")

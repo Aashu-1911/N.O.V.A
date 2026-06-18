@@ -52,6 +52,42 @@ User: Remind me to call mom tomorrow
   }
 }
 
+User: Open VS Code
+
+{
+  "intent": "open_application",
+  "parameters": {
+    "app_name": "VS Code"
+  }
+}
+
+User: Open Microsoft Store
+
+{
+  "intent": "open_application",
+  "parameters": {
+    "app_name": "Microsoft Store"
+  }
+}
+
+User: Open WhatsApp
+
+{
+  "intent": "open_application",
+  "parameters": {
+    "app_name": "WhatsApp"
+  }
+}
+
+User: Open Telegram
+
+{
+  "intent": "open_application",
+  "parameters": {
+    "app_name": "Telegram"
+  }
+}
+
 Always include:
 - intent
 - parameters
