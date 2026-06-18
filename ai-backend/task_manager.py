@@ -6,14 +6,14 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 from database import get_connection
 
 
-def _row_to_task(row: Sequence[Any]) -> Dict[str, Any]:
+def _row_to_task(row):
     return {
         "id": row[0],
         "task_name": row[1],
         "date": row[2],
-        "category": row[3],
-        "priority": row[4],
-        "completed": bool(row[5]),
+        "completed": bool(row[3]),
+        "category": row[4],
+        "priority": row[5],
         "created_at": row[6],
         "updated_at": row[7],
     }
