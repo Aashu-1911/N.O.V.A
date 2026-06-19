@@ -5,10 +5,18 @@ from ollama_client import send_message, parse_intent
 from intent_router import route_command
 from voice import speak
 
-from system_manager import lock_pc, take_screenshot
+# from system_manager import lock_pc, take_screenshot
 
 from app_manager import load_start_menu_apps
 
+from system_manager import (
+    lock_pc,
+    take_screenshot,
+    mute_volume,
+    unmute_volume,
+    volume_up,
+    volume_down,
+)
 
 from app_manager import open_application
 from browser_manager import open_website
@@ -330,7 +338,32 @@ def _handle_voice_command(command: str) -> dict:
         return {
             "status": "success"
         }
-        
+    
+    
+    #volutme control
+    if intent == "volume_control":
+
+        action = entities.get("volume_action")
+
+        print(f"[VOLUME] Action: {action}")
+
+        if action == "mute":
+            mute_volume()
+
+        elif action == "unmute":
+            unmute_volume()
+
+        elif action == "up":
+            volume_up()
+
+        elif action == "down":
+            volume_down()
+
+        return {
+            "status": "success",
+            "intent": intent
+        }
+    
     # Fallback: ask the LLM for a reply and store it
     try:
         llm_reply = "".join(send_message(command, memory.get_history()))

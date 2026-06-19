@@ -190,6 +190,24 @@ def _extract_application(text: str):
 
     return None
 
+def _extract_volume_action(text: str):
+    text = text.lower()
+
+    if "unmute" in text:
+        return "unmute"
+
+    if "mute" in text:
+        return "mute"
+
+    if "volume up" in text or "increase volume" in text:
+        return "up"
+
+    if "volume down" in text or "decrease volume" in text:
+        return "down"
+
+    return None
+
+
 def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     """
     Parse a user message into a lightweight intent + entities payload.
@@ -256,6 +274,11 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     ):
         intent = "volume_control"
     
+    elif re.search(
+        r"\b(mute|unmute|volume up|volume down|increase volume|decrease volume)\b",
+        normalized
+    ):
+        intent = "volume_control"
     
     entities = {
         "task_name": _extract_task_name(text, intent),
@@ -264,6 +287,7 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         "url": _extract_url(text),
         "app_name": _extract_application(text),
         "date": _extract_date(text),
+        "volume_action": _extract_volume_action(text),
     }
 
     task_name = entities.get("task_name")
@@ -310,7 +334,10 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
 
     elif intent == "volume_control":
         confidence = 0.95
-        
+    
+    elif intent == "volume_control":
+        confidence = 0.95
+    
     return {
         "intent": intent,
         "entities": entities,
