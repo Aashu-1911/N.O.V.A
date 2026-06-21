@@ -16,6 +16,7 @@ import re
 import tempfile
 import threading
 import time
+import pythoncom
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -136,6 +137,9 @@ class TTSManager:
         if pyttsx3 is None:
             raise RuntimeError("pyttsx3 is not installed. Install it with pip.")
         if self._engine is None:
+            print("[TTS] Initializing COM")
+            pythoncom.CoInitialize()
+            print("[TTS] Initializing pyttsx3")
             self._engine = pyttsx3.init()
             voices = self._engine.getProperty("voices") or []
             if voices:

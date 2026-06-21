@@ -8,7 +8,7 @@ Phase 1 keeps the pieces in one module for simplicity:
 """
 
 from __future__ import annotations
-
+import psutil
 import json
 import os
 import re
@@ -317,11 +317,11 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     ):
         intent = "media_control"
         
-    # elif re.search(
-    #     r"\b(close|exit|quit|terminate|kill)\b",
-    #     normalized
-    # ):
-    #     intent = "close_application"
+    elif re.search(
+        r"\b(close|exit|quit|terminate|kill)\b",
+        normalized
+    ):
+        intent = "close_application"
     
     entities = {
         "task_name": _extract_task_name(text, intent),
@@ -384,6 +384,9 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         confidence = 0.95
         
     elif intent == "media_control" and entities.get("media_action"):
+        confidence = 0.95
+    
+    elif intent == "close_application" and entities.get("app_name"):
         confidence = 0.95
     
     return {

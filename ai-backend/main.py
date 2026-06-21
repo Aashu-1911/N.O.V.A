@@ -6,7 +6,10 @@ from intent_router import route_command
 from voice import speak
 from media_manager import play_media
 # from system_manager import lock_pc, take_screenshot
-
+from app_manager import (
+    open_application,
+    close_application,
+)
 from app_manager import load_start_menu_apps
 
 from system_manager import (
@@ -382,6 +385,27 @@ def _handle_voice_command(command: str) -> dict:
                 "intent": intent,
                 "reply": reply
             }
+    
+    
+    #close application
+    if intent == "close_application":
+        app_name = entities.get("app_name")
+        print(f"[APP] Closing: {app_name}")
+        success = close_application(app_name)
+        reply = (
+            f"Closed {app_name}"
+            if success
+            else f"Could not close {app_name}"
+        )
+
+        memory.add_message("assistant", reply)
+        speak(reply)
+
+        return {
+            "status": "success" if success else "error",
+            "reply": reply,
+            "intent": intent,
+        }
     
     # Fallback: ask the LLM for a reply and store it
     try:

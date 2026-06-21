@@ -1,6 +1,7 @@
 import subprocess
 from rapidfuzz import process
 import json
+import psutil
 
 START_MENU_APPS = {}
 
@@ -201,3 +202,37 @@ def open_application(app_name: str) -> bool:
     except Exception as e:
         print("[APP ERROR]", e)
         return False
+    
+    
+
+def close_application(app_name: str) -> bool:
+
+    app_name = app_name.lower().strip()
+
+    PROCESS_MAP = {
+        "chrome": "chrome.exe",
+        "telegram": "telegram.exe",
+        "telegram desktop": "telegram.exe",
+        "spotify": "spotify.exe",
+        "discord": "discord.exe",
+        "notepad": "notepad.exe",
+        "vs code": "code.exe",
+        "vscode": "code.exe",
+    }
+
+    process_name = PROCESS_MAP.get(app_name)
+
+    if not process_name:
+        return False
+
+    for proc in psutil.process_iter(["name"]):
+
+        try:
+            if proc.info["name"] and proc.info["name"].lower() == process_name:
+                proc.terminate()
+                return True
+
+        except Exception:
+            pass
+
+    return False
