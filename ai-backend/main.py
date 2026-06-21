@@ -4,7 +4,7 @@ from conversation import ConversationManager
 from ollama_client import send_message, parse_intent
 from intent_router import route_command
 from voice import speak
-
+from media_manager import play_media
 # from system_manager import lock_pc, take_screenshot
 
 from app_manager import load_start_menu_apps
@@ -363,6 +363,25 @@ def _handle_voice_command(command: str) -> dict:
             "status": "success",
             "intent": intent
         }
+        
+    
+    # Media intent execution
+    if intent == "media_control":
+        action = entities.get("media_action")
+        query = entities.get("media_query")
+        print(f"[MEDIA] Action: {action}")
+        print(f"[MEDIA] Query: {query}")
+        if action == "play" and query:
+            success = play_media(query)
+            reply = f"Playing {query}"
+            memory.add_message("assistant", reply)
+            speak(reply)
+            
+            return {
+                "status": "success" if success else "error",
+                "intent": intent,
+                "reply": reply
+            }
     
     # Fallback: ask the LLM for a reply and store it
     try:

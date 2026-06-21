@@ -207,6 +207,37 @@ def _extract_volume_action(text: str):
 
     return None
 
+def _extract_media_action(text: str):
+    text = text.lower()
+
+    if "pause" in text:
+        return "pause"
+
+    if "resume" in text:
+        return "resume"
+
+    if "next" in text or "skip" in text:
+        return "next"
+
+    if "previous" in text or "back" in text:
+        return "previous"
+
+    if text.startswith("play "):
+        return "play"
+
+    return None
+
+
+def _extract_media_query(text: str):
+    text = text.strip()
+
+    lower = text.lower()
+
+    if lower.startswith("play "):
+        return text[5:].strip()
+
+    return None
+
 
 def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     """
@@ -280,6 +311,18 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     ):
         intent = "volume_control"
     
+    elif re.search(
+        r"\b(play|pause|resume|next|previous|skip)\b",
+        normalized
+    ):
+        intent = "media_control"
+        
+    # elif re.search(
+    #     r"\b(close|exit|quit|terminate|kill)\b",
+    #     normalized
+    # ):
+    #     intent = "close_application"
+    
     entities = {
         "task_name": _extract_task_name(text, intent),
         "category": _extract_category(text),
@@ -288,6 +331,8 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         "app_name": _extract_application(text),
         "date": _extract_date(text),
         "volume_action": _extract_volume_action(text),
+        "media_action": _extract_media_action(text),
+        "media_query": _extract_media_query(text),
     }
 
     task_name = entities.get("task_name")
@@ -336,6 +381,9 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         confidence = 0.95
     
     elif intent == "volume_control":
+        confidence = 0.95
+        
+    elif intent == "media_control" and entities.get("media_action"):
         confidence = 0.95
     
     return {
