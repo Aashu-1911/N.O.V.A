@@ -3,7 +3,7 @@
 .venv/
 venv/
 env/
-
+.kiro
 # Python
 
 **pycache**/

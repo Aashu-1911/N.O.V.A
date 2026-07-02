@@ -1,0 +1,2 @@
+DEFAULT_VOICE_MODEL = "medium"
+DEFAULT_OLLAMA_MODEL = "qwen3:8b"
