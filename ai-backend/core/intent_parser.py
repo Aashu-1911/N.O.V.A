@@ -55,6 +55,28 @@ def _extract_url(text: str) -> Optional[str]:
     return None
 
 
+def _extract_search_query(text: str) -> Optional[str]:
+    """Extract search query from search commands."""
+    # Patterns like "search google for X", "search for X", "google X"
+    patterns = [
+        r"search\s+(?:google|web|online)?\s*(?:for\s+)?(.+)",
+        r"(?:google|search)\s+(.+)",
+        r"look up\s+(.+)",
+        r"find\s+(.+\s+on\s+(?:google|web))",
+    ]
+    
+    text_lower = text.lower()
+    for pattern in patterns:
+        match = re.search(pattern, text_lower, flags=re.IGNORECASE)
+        if match:
+            query = match.group(1).strip()
+            # Remove trailing punctuation
+            query = re.sub(r'[.!?]+$', '', query)
+            return query if query else None
+    
+    return None
+
+
 def _extract_priority(text: str) -> Optional[str]:
     priority_match = re.search(r"\b(low|medium|high|urgent)\b", text, flags=re.IGNORECASE)
     return priority_match.group(1).lower() if priority_match else None
@@ -188,6 +210,8 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         intent = "add_task" if "remind me" not in normalized else "reminder"
     elif re.search(r"\b(stats|statistics|progress|summary|status)\b", normalized):
         intent = "show_stats"
+    elif re.search(r"\b(search|look up|find|google)\b", normalized) and _extract_search_query(text):
+        intent = "search_web"
     elif _extract_application(text):
         intent = "open_application"
     elif _extract_url(text) or re.search(r"\b(open|visit|website|site|browser)\b", normalized):
@@ -210,6 +234,7 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         "category": _extract_category(text),
         "priority": _extract_priority(text),
         "url": _extract_url(text),
+        "search_query": _extract_search_query(text),
         "app_name": _extract_application(text),
         "date": _extract_date(text),
         "volume_action": _extract_volume_action(text),
@@ -240,6 +265,8 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         confidence = 0.9
     elif intent == "open_website" and entities.get("url"):
         confidence = 0.9
+    elif intent == "search_web" and entities.get("search_query"):
+        confidence = 0.95
     elif intent == "open_application" and entities.get("app_name"):
         confidence = 0.9
     elif intent == "show_stats":

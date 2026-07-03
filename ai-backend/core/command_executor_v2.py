@@ -13,6 +13,7 @@ DO NOT create response_builder yet - using manual dicts.
 from typing import Dict, Optional
 from core.intent_parser import parse_intent
 from managers.task_manager import add_task, complete_task, get_tasks, get_task_stats
+from managers.browser_manager import open_website
 
 
 # ============================================================================
@@ -150,12 +151,105 @@ def handle_update_task(entities: Dict, context: Optional[Dict] = None) -> Dict:
 
 
 def handle_open_website(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for open_website intent."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - open_website",
-        "payload": {}
-    }
+    """Handler for open_website intent - opens browser, websites, or performs web searches."""
+    url = entities.get("url")
+    
+    # If no URL provided, open default browser
+    if not url:
+        try:
+            success = open_website("https://www.google.com")
+            if success:
+                return {
+                    "status": "success",
+                    "reply": "Opening browser",
+                    "payload": {"url": "https://www.google.com"}
+                }
+            else:
+                return {
+                    "status": "error",
+                    "reply": "Failed to open browser",
+                    "payload": {}
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "reply": f"Failed to open browser: {str(e)}",
+                "payload": {"error": str(e)}
+            }
+    
+    # Handle website/URL opening
+    try:
+        # Format URL properly
+        formatted_url = url
+        if not url.startswith(("http://", "https://")):
+            # Check if it's a known website name
+            if "." not in url:
+                # Treat as search query or known site name
+                formatted_url = f"https://www.{url}.com"
+            else:
+                formatted_url = f"https://{url}"
+        
+        success = open_website(formatted_url)
+        
+        if success:
+            display_url = formatted_url.replace("https://", "").replace("http://", "")
+            return {
+                "status": "success",
+                "reply": f"Opening {display_url}",
+                "payload": {"url": formatted_url}
+            }
+        else:
+            return {
+                "status": "error",
+                "reply": f"Could not open {url}",
+                "payload": {"url": url}
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": f"Failed to open website: {str(e)}",
+            "payload": {"error": str(e), "url": url}
+        }
+
+
+def handle_search_web(entities: Dict, context: Optional[Dict] = None) -> Dict:
+    """Handler for search_web intent - performs web searches using Google."""
+    search_query = entities.get("search_query")
+    
+    if not search_query:
+        return {
+            "status": "error",
+            "reply": "I couldn't determine what to search for",
+            "payload": {}
+        }
+    
+    try:
+        # Build Google search URL
+        from urllib.parse import quote_plus
+        search_url = f"https://www.google.com/search?q={quote_plus(search_query)}"
+        
+        success = open_website(search_url)
+        
+        if success:
+            return {
+                "status": "success",
+                "reply": f"Searching for {search_query}",
+                "payload": {"query": search_query, "url": search_url}
+            }
+        else:
+            return {
+                "status": "error",
+                "reply": f"Failed to search for {search_query}",
+                "payload": {"query": search_query}
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": f"Failed to perform search: {str(e)}",
+            "payload": {"error": str(e), "query": search_query}
+        }
 
 
 def handle_open_application(entities: Dict, context: Optional[Dict] = None) -> Dict:
@@ -241,6 +335,7 @@ HANDLERS = {
     "show_stats": handle_show_stats,
     "update_task": handle_update_task,
     "open_website": handle_open_website,
+    "search_web": handle_search_web,
     "open_application": handle_open_application,
     "close_application": handle_close_application,
     "lock_pc": handle_lock_pc,
