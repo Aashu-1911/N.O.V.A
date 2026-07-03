@@ -47,7 +47,12 @@ def _extract_url(text: str) -> Optional[str]:
         if parsed.netloc:
             return candidate
 
-    website_name = match_website(text)
+    # Try to extract website name from commands like "open google", "visit youtube"
+    # Remove common command words first
+    cleaned_text = re.sub(r'\b(open|visit|go to|navigate to)\b', '', text, flags=re.IGNORECASE).strip()
+    
+    # Match against known websites
+    website_name = match_website(cleaned_text)
 
     if website_name:
         return website_name
