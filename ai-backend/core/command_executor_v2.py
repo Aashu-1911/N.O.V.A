@@ -12,6 +12,7 @@ DO NOT create response_builder yet - using manual dicts.
 
 from typing import Dict, Optional
 from core.intent_parser import parse_intent
+from managers.task_manager import add_task, complete_task, get_tasks, get_task_stats
 
 
 # ============================================================================
@@ -19,39 +20,124 @@ from core.intent_parser import parse_intent
 # ============================================================================
 
 def handle_add_task(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for add_task intent."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - add_task",
-        "payload": {}
-    }
+    """Handler for add_task intent."""
+    task_name = entities.get("task_name")
+    
+    if not task_name:
+        return {
+            "status": "error",
+            "reply": "I couldn't determine the task name. Please try again.",
+            "payload": {}
+        }
+    
+    try:
+        task = add_task(
+            task_name=task_name,
+            date=entities.get("date"),
+            category=entities.get("category"),
+            priority=entities.get("priority")
+        )
+        return {
+            "status": "success",
+            "reply": f"Added task: {task_name}",
+            "payload": task
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": f"Failed to add task: {str(e)}",
+            "payload": {"error": str(e)}
+        }
 
 
 def handle_show_tasks(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for show_tasks intent."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - show_tasks",
-        "payload": {}
-    }
+    """Handler for show_tasks intent."""
+    try:
+        # Check if user wants only pending tasks
+        include_completed = entities.get("include_completed", False)
+        tasks = get_tasks(include_completed=include_completed)
+        
+        if not tasks:
+            return {
+                "status": "success",
+                "reply": "You have no tasks.",
+                "payload": {"tasks": []}
+            }
+        
+        # Format task list for display
+        task_list = []
+        for task in tasks:
+            status = "✓" if task["completed"] else "○"
+            task_str = f"{status} {task['task_name']}"
+            if task.get("date"):
+                task_str += f" (due: {task['date']})"
+            task_list.append(task_str)
+        
+        reply = f"Here are your tasks:\n" + "\n".join(task_list)
+        return {
+            "status": "success",
+            "reply": reply,
+            "payload": {"tasks": tasks}
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": "Failed to fetch tasks.",
+            "payload": {"error": str(e)}
+        }
 
 
 def handle_complete_task(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for complete_task intent."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - complete_task",
-        "payload": {}
-    }
+    """Handler for complete_task intent."""
+    task_identifier = entities.get("task_name") or entities.get("task_id")
+    
+    if not task_identifier:
+        return {
+            "status": "error",
+            "reply": "I couldn't determine which task to complete. Please specify the task name or ID.",
+            "payload": {}
+        }
+    
+    try:
+        task = complete_task(task_identifier)
+        
+        if not task:
+            return {
+                "status": "error",
+                "reply": f"Task '{task_identifier}' not found.",
+                "payload": {}
+            }
+        
+        return {
+            "status": "success",
+            "reply": f"Completed task: {task['task_name']}",
+            "payload": task
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": f"Failed to complete task: {str(e)}",
+            "payload": {"error": str(e)}
+        }
 
 
 def handle_show_stats(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for show_stats intent."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - show_stats",
-        "payload": {}
-    }
+    """Handler for show_stats intent."""
+    try:
+        stats = get_task_stats()
+        reply = f"You have {stats['pending']} pending and {stats['completed']} completed tasks."
+        
+        return {
+            "status": "success",
+            "reply": reply,
+            "payload": stats
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": "Failed to get task statistics.",
+            "payload": {"error": str(e)}
+        }
 
 
 def handle_update_task(entities: Dict, context: Optional[Dict] = None) -> Dict:
