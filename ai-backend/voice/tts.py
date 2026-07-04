@@ -134,6 +134,8 @@ class TTSManager:
         return max(0.0, min(1.0, float(value)))
 
     def _ensure_engine(self):
+        # Engine must only be initialized from within the worker thread.
+        # Calling this from outside the worker will raise to catch misuse.
         if pyttsx3 is None:
             raise RuntimeError("pyttsx3 is not installed. Install it with pip.")
         if self._engine is None:
@@ -147,14 +149,24 @@ class TTSManager:
                 self._engine.setProperty("voice", voices[index].id)
             self._engine.setProperty("rate", self.rate)
             self._engine.setProperty("volume", self._volume)
+            print("[TTS] pyttsx3 ready")
 
     def _ensure_worker(self) -> None:
         if self._worker and self._worker.is_alive():
             return
 
         self._stop_event.clear()
+        engine_ready = threading.Event()
 
         def _loop() -> None:
+            # Initialize COM and pyttsx3 here, inside the dedicated worker thread
+            try:
+                self._ensure_engine()
+            except Exception as e:
+                print(f"[TTS] Engine init failed: {e}")
+            finally:
+                engine_ready.set()  # unblock _ensure_worker caller
+
             while not self._stop_event.is_set():
                 try:
                     request = self._queue.get(timeout=0.2)
@@ -171,6 +183,8 @@ class TTSManager:
 
         self._worker = threading.Thread(target=_loop, daemon=True)
         self._worker.start()
+        # Wait for engine to finish initializing before returning
+        engine_ready.wait(timeout=15)
 
     def _ensure_coqui(self):
         if CoquiTTS is None:
