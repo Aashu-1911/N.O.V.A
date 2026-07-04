@@ -5,6 +5,7 @@ Browser handlers - handles open_browser (open_website) and search_web intents.
 from typing import Dict, Optional
 from urllib.parse import quote_plus
 
+from core.response_builder import success, error
 from managers.browser_manager import open_website
 
 
@@ -15,25 +16,13 @@ def handle_open_website(entities: Dict, context: Optional[Dict] = None) -> Dict:
     # If no URL provided, open default browser
     if not url:
         try:
-            success = open_website("https://www.google.com")
-            if success:
-                return {
-                    "status": "success",
-                    "reply": "Opening browser",
-                    "payload": {"url": "https://www.google.com"}
-                }
+            result = open_website("https://www.google.com")
+            if result:
+                return success("Opening browser", payload={"url": "https://www.google.com"})
             else:
-                return {
-                    "status": "error",
-                    "reply": "Failed to open browser",
-                    "payload": {}
-                }
+                return error("Failed to open browser")
         except Exception as e:
-            return {
-                "status": "error",
-                "reply": f"Failed to open browser: {str(e)}",
-                "payload": {"error": str(e)}
-            }
+            return error(f"Failed to open browser: {str(e)}", payload={"error": str(e)})
 
     # Handle website/URL opening
     try:
@@ -44,28 +33,19 @@ def handle_open_website(entities: Dict, context: Optional[Dict] = None) -> Dict:
             else:
                 formatted_url = f"https://{url}"
 
-        success = open_website(formatted_url)
+        result = open_website(formatted_url)
 
-        if success:
+        if result:
             display_url = formatted_url.replace("https://", "").replace("http://", "")
-            return {
-                "status": "success",
-                "reply": f"Opening {display_url}",
-                "payload": {"url": formatted_url}
-            }
+            return success(f"Opening {display_url}", payload={"url": formatted_url})
         else:
-            return {
-                "status": "error",
-                "reply": f"Could not open {url}",
-                "payload": {"url": url}
-            }
+            return error(f"Could not open {url}", payload={"url": url})
 
     except Exception as e:
-        return {
-            "status": "error",
-            "reply": f"Failed to open website: {str(e)}",
-            "payload": {"error": str(e), "url": url}
-        }
+        return error(
+            f"Failed to open website: {str(e)}",
+            payload={"error": str(e), "url": url},
+        )
 
 
 def handle_search_web(entities: Dict, context: Optional[Dict] = None) -> Dict:
@@ -73,32 +53,25 @@ def handle_search_web(entities: Dict, context: Optional[Dict] = None) -> Dict:
     search_query = entities.get("search_query")
 
     if not search_query:
-        return {
-            "status": "error",
-            "reply": "I couldn't determine what to search for",
-            "payload": {}
-        }
+        return error("I couldn't determine what to search for")
 
     try:
         search_url = f"https://www.google.com/search?q={quote_plus(search_query)}"
-        success = open_website(search_url)
+        result = open_website(search_url)
 
-        if success:
-            return {
-                "status": "success",
-                "reply": f"Searching for {search_query}",
-                "payload": {"query": search_query, "url": search_url}
-            }
+        if result:
+            return success(
+                f"Searching for {search_query}",
+                payload={"query": search_query, "url": search_url},
+            )
         else:
-            return {
-                "status": "error",
-                "reply": f"Failed to search for {search_query}",
-                "payload": {"query": search_query}
-            }
+            return error(
+                f"Failed to search for {search_query}",
+                payload={"query": search_query},
+            )
 
     except Exception as e:
-        return {
-            "status": "error",
-            "reply": f"Failed to perform search: {str(e)}",
-            "payload": {"error": str(e), "query": search_query}
-        }
+        return error(
+            f"Failed to perform search: {str(e)}",
+            payload={"error": str(e), "query": search_query},
+        )

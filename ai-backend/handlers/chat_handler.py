@@ -4,6 +4,7 @@ Chat handler - handles general_chat and answer_question intents using the LLM.
 
 from typing import Dict, Optional
 
+from core.response_builder import success, error
 from services.ollama_service import send_message as ollama_send_message, OllamaConnectionError
 
 
@@ -12,11 +13,7 @@ def handle_general_chat(entities: Dict, context: Optional[Dict] = None) -> Dict:
     raw_command = context.get("raw_command", "") if context else ""
 
     if not raw_command:
-        return {
-            "status": "error",
-            "reply": "I didn't receive any input to process.",
-            "payload": {}
-        }
+        return error("I didn't receive any input to process.")
 
     try:
         # Collect streaming response from Ollama LLM
@@ -24,27 +21,14 @@ def handle_general_chat(entities: Dict, context: Optional[Dict] = None) -> Dict:
         reply = "".join(chunks).strip()
 
         if not reply:
-            return {
-                "status": "error",
-                "reply": "I received an empty response. Please try again.",
-                "payload": {}
-            }
+            return error("I received an empty response. Please try again.")
 
-        return {
-            "status": "success",
-            "reply": reply,
-            "payload": {}
-        }
+        return success(reply)
 
     except OllamaConnectionError:
-        return {
-            "status": "error",
-            "reply": "I'm unable to connect to the AI service right now. Please make sure Ollama is running.",
-            "payload": {}
-        }
+        return error("I'm unable to connect to the AI service right now. Please make sure Ollama is running.")
     except Exception as e:
-        return {
-            "status": "error",
-            "reply": "I encountered an error processing your request. Please try again.",
-            "payload": {"error": str(e)}
-        }
+        return error(
+            "I encountered an error processing your request. Please try again.",
+            payload={"error": str(e)},
+        )
