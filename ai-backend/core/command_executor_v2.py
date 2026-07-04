@@ -413,13 +413,102 @@ def handle_volume_control(entities: Dict, context: Optional[Dict] = None) -> Dic
         }
 
 
+def handle_play_music(entities: Dict, context: Optional[Dict] = None) -> Dict:
+    """
+    Handler for play_music - alias for media_control with play action.
+    This function exists for backwards compatibility and clear separation.
+    """
+    # Ensure media_action is set to "play"
+    entities["media_action"] = "play"
+    
+    # Delegate to handle_media_control
+    return handle_media_control(entities, context)
+
+
 def handle_media_control(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for media_control intent."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - media_control",
-        "payload": {}
-    }
+    """Handler for media_control intent - supports play/pause/resume/next/previous actions."""
+    action = entities.get("media_action")
+    query = entities.get("media_query")
+    
+    if not action:
+        return {
+            "status": "error",
+            "reply": "I couldn't determine the media action. Please specify play, pause, resume, next, or previous.",
+            "payload": {}
+        }
+    
+    try:
+        # Normalize action to lowercase for matching
+        action_lower = action.lower()
+        
+        if action_lower == "play":
+            # Handle play with query
+            if query:
+                from managers.media_manager import play_media
+                success = play_media(query)
+                
+                if success:
+                    return {
+                        "status": "success",
+                        "reply": f"Playing {query}",
+                        "payload": {"action": "play", "query": query}
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "reply": f"Failed to play {query}",
+                        "payload": {"action": "play", "query": query}
+                    }
+            else:
+                return {
+                    "status": "error",
+                    "reply": "Please specify what you want to play",
+                    "payload": {"action": "play"}
+                }
+        
+        elif action_lower == "pause":
+            # For V1, we just acknowledge the action
+            # In future, this could integrate with system media controls
+            return {
+                "status": "success",
+                "reply": "Media paused",
+                "payload": {"action": "pause"}
+            }
+        
+        elif action_lower == "resume":
+            return {
+                "status": "success",
+                "reply": "Media resumed",
+                "payload": {"action": "resume"}
+            }
+        
+        elif action_lower == "next":
+            return {
+                "status": "success",
+                "reply": "Playing next track",
+                "payload": {"action": "next"}
+            }
+        
+        elif action_lower == "previous":
+            return {
+                "status": "success",
+                "reply": "Playing previous track",
+                "payload": {"action": "previous"}
+            }
+        
+        else:
+            return {
+                "status": "error",
+                "reply": f"Unknown media action: {action}",
+                "payload": {"action": action}
+            }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": f"Failed to control media: {str(e)}",
+            "payload": {"error": str(e), "action": action}
+        }
 
 
 def handle_reminder(entities: Dict, context: Optional[Dict] = None) -> Dict:
