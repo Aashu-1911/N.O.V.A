@@ -32,7 +32,7 @@ from core.intent_parser import parse_intent
 # Connector pattern (case-insensitive); order matters — longer phrases first
 # ---------------------------------------------------------------------------
 _CONNECTOR_PATTERN = re.compile(
-    r"\s*(?:after\s+that|and|then|also|,)\s*",
+    r"\s*\b(?:after\s+that|and|then|also)\b\s*|\s*,\s*",
     re.IGNORECASE,
 )
 
