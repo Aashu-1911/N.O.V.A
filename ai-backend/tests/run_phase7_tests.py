@@ -8,7 +8,8 @@ print("=" * 60)
 print("TEST 1: Import and basic routing")
 print("=" * 60)
 try:
-    from core.command_executor_v2 import execute_command, handle_general_chat, HANDLERS
+from core.command_executor import execute_command, HANDLERS
+from handlers.chat_handler import handle_general_chat
 
     t1_routing = "answer_question" in HANDLERS
     t1_wired = HANDLERS["answer_question"] is handle_general_chat
@@ -34,7 +35,7 @@ print("=" * 60)
 print("TEST 2: General chat handles connection error gracefully")
 print("=" * 60)
 try:
-    from core.command_executor_v2 import execute_command
+    from core.command_executor import execute_command
 
     test_queries = [
         "How are you?",
@@ -81,7 +82,7 @@ print("=" * 60)
 print("TEST 3: raw_command injection")
 print("=" * 60)
 try:
-    from core.command_executor_v2 import handle_general_chat
+    from handlers.chat_handler import handle_general_chat
 
     all_passed = True
 
@@ -137,7 +138,7 @@ print("=" * 60)
 print("TEST 4: Non-chat intents still work (regression)")
 print("=" * 60)
 try:
-    from core.command_executor_v2 import execute_command
+    from core.command_executor import execute_command
 
     result = execute_command("Show my tasks")
     intent = result.get("intent")

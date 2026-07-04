@@ -13,7 +13,7 @@ from pathlib import Path
 # Add parent directory to path to import modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.command_executor_v2 import execute_command
+from core.command_executor import execute_command
 
 
 def test_lock_pc():

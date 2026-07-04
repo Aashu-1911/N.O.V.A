@@ -12,7 +12,7 @@ Test commands:
 import sys
 sys.path.insert(0, "c:\\Users\\ashis\\OneDrive\\Desktop\\Projects\\Assistant\\ai-backend")
 
-from core.command_executor_v2 import execute_command
+from core.command_executor import execute_command
 from core.intent_parser import parse_intent
 
 

@@ -5,7 +5,7 @@ Test script for app handler functions in command_executor_v2.py
 import sys
 sys.path.insert(0, r"c:\Users\ashis\OneDrive\Desktop\Projects\Assistant\ai-backend")
 
-from core.command_executor_v2 import handle_open_application, handle_close_application
+from handlers.app_handler import handle_open_application, handle_close_application
 
 def test_open_application():
     print("\n=== Testing handle_open_application ===")

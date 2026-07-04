@@ -17,7 +17,7 @@ import logging
 import re
 
 from voice import speak
-from core.command_executor_v2 import execute_command
+from core.command_executor import execute_command
 
 logger = logging.getLogger(__name__)
 

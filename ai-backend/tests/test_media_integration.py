@@ -8,7 +8,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.command_executor_v2 import execute_command
+from core.command_executor import execute_command
 
 
 def test_play_music_command():

@@ -15,7 +15,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.command_executor_v2 import execute_command, handle_show_tasks
+from core.command_executor import execute_command
+from handlers.task_handler import handle_show_tasks
 
 
 def print_separator(char="="):

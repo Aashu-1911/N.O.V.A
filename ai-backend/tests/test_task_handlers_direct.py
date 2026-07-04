@@ -6,11 +6,11 @@ Tests handlers directly with correct entities to verify implementation.
 import sys
 sys.path.insert(0, r"c:\Users\ashis\OneDrive\Desktop\Projects\Assistant\ai-backend")
 
-from core.command_executor_v2 import (
+from handlers.task_handler import (
     handle_add_task,
     handle_show_tasks,
     handle_complete_task,
-    handle_show_stats
+    handle_show_stats,
 )
 
 def test_handle_add_task_direct():

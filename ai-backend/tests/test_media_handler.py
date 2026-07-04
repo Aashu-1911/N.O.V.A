@@ -8,7 +8,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.command_executor_v2 import handle_media_control, handle_play_music
+from handlers.media_handler import handle_media_control, handle_play_music
 
 
 def test_play_music():

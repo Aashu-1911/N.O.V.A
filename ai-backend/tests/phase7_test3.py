@@ -2,7 +2,7 @@
 import sys
 sys.path.insert(0, ".")
 
-from core.command_executor_v2 import handle_general_chat
+from handlers.chat_handler import handle_general_chat
 
 all_passed = True
 

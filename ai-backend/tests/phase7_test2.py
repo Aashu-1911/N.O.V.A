@@ -2,7 +2,7 @@
 import sys
 sys.path.insert(0, ".")
 
-from core.command_executor_v2 import execute_command
+from core.command_executor import execute_command
 
 test_queries = [
     "How are you?",

@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from core.command_executor_v2 import execute_command
+from core.command_executor import execute_command
 from core.intent_parser import parse_intent
 from managers.task_manager import delete_task, get_task_stats, get_tasks
 
