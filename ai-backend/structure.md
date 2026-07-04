@@ -16,9 +16,11 @@ ai-backend/
 │
 ├── core/
 │   ├── __init__.py
-│   ├── command_executor.py         # Central routing layer: parses intent and dispatches to correct handler
-│   ├── response_builder.py         # Factory helpers: success(), error(), partial() for standardized response dicts
-│   ├── intent_parser.py            # Rule-based NLP: extracts intent + entities (app, task, url, etc.) from raw text
+│   ├── command_executor.py         # Public entry point: splits chains, routes single commands via HANDLERS dict
+│   ├── command_chain.py            # Command chaining: split_commands, _is_dependent, execute_chain
+│   ├── execution_context.py        # ExecutionContext dataclass: shared state carrier between chained sub-commands
+│   ├── response_builder.py         # Factory helpers: success(), error(), partial() for standardised response dicts
+│   ├── intent_parser.py            # Rule-based NLP: extracts intent + entities from raw text
 │   ├── intent_router.py            # Legacy router module (superseded by HANDLERS dict in command_executor)
 │   ├── conversation.py             # Conversation history management for multi-turn context
 │   ├── memory.py                   # Short-term in-memory storage for session state
@@ -27,10 +29,10 @@ ai-backend/
 ├── handlers/
 │   ├── __init__.py                 # Re-exports all handler functions for convenient imports
 │   ├── task_handler.py             # Handles add_task, show_tasks, complete_task, show_stats, update_task intents
-│   ├── browser_handler.py          # Handles open_website and search_web intents (opens browser/Google search)
-│   ├── app_handler.py              # Handles open_application and close_application intents (desktop apps)
+│   ├── browser_handler.py          # Handles open_website and search_web intents
+│   ├── app_handler.py              # Handles open_application and close_application intents
 │   ├── system_handler.py           # Handles lock_pc, take_screenshot, and volume_control intents
-│   ├── media_handler.py            # Handles play_music and media_control intents (play/pause/next/previous)
+│   ├── media_handler.py            # Handles play_music and media_control intents
 │   └── chat_handler.py             # Handles general_chat and answer_question intents via Ollama LLM fallback
 │
 ├── adapters/
@@ -57,7 +59,7 @@ ai-backend/
 │   ├── __init__.py
 │   ├── llm_service.py              # High-level LLM interface: re-exports OllamaClient and send_message
 │   ├── ollama_service.py           # Ollama API client: sends messages and streams responses from local LLM
-│   └── whisper_service.py          # Whisper model wrapper for standalone audio file transcription
+│   └── whisper_service.py          # Alias shim: re-exports VoiceInputManager as WhisperService
 │
 ├── database/
 │   ├── __init__.py                 # Exports init_db() to set up SQLite schema on first run
@@ -68,12 +70,13 @@ ai-backend/
 ├── utils/
 │   ├── __init__.py
 │   ├── constants.py                # Shared constants: known app names, website aliases, intent keywords
-│   ├── entity_matcher.py           # Fuzzy matching helpers for website names and app names
+│   ├── entity_matcher.py           # match_website(): difflib fuzzy matching for website names
 │   ├── logger.py                   # Shared application logger configuration
-│   └── transcript_corrector.py     # Post-processes Whisper transcripts to fix common misrecognitions
+│   └── transcript_corrector.py     # LLM-based transcript cleanup: sends Whisper output to Ollama to fix misrecognitions
 │
 ├── tests/
 │   ├── __init__.py
+│   ├── test_command_chain.py       # Unit + property-based tests for split_commands, _is_dependent, _update_context, execute_chain
 │   ├── test_handlers.py            # Unit tests for all handler modules with mocked manager calls
 │   ├── test_response_builder.py    # Unit tests for success(), error(), partial() response helpers
 │   ├── test_voice_adapter.py       # Integration tests for voice_command_callback pipeline
@@ -99,13 +102,18 @@ ai-backend/
 │   ├── test_volume.py              # Volume control (mute/unmute/up/down) tests
 │   ├── test_lock.py                # Lock PC functionality tests
 │   ├── test_window.py              # Window manager tests
-│   ├── debug_volume.py             # Debug script for diagnosing volume control issues
-│   ├── check_schema.py             # Script to inspect and verify the SQLite database schema
-│   ├── clear_tasks.py              # Utility script to wipe all tasks from the database
+│   ├── PHASE2_TEST_RESULTS.md      # Recorded test results for phase 2
+│   ├── PHASE3_TEST_RESULTS.md      # Recorded test results for phase 3
+│   ├── PHASE4_TEST_RESULTS.md      # Recorded test results for phase 4
+│   ├── PHASE5_TEST_RESULTS.md      # Recorded test results for phase 5
+│   ├── PHASE6_TEST_RESULTS.md      # Recorded test results for phase 6
 │   ├── run_phase7_tests.py         # Test runner for phase 7 migration tests
 │   ├── phase7_test2.py             # Phase 7 migration test variant 2
 │   ├── phase7_test3.py             # Phase 7 migration test variant 3
 │   ├── phase7_test4.py             # Phase 7 migration test variant 4
+│   ├── debug_volume.py             # Debug script for diagnosing volume control issues
+│   ├── check_schema.py             # Script to inspect and verify the SQLite database schema
+│   ├── clear_tasks.py              # Utility script to wipe all tasks from the database
 │   └── test.py                     # General scratch/exploratory test file
 │
 ├── data/
@@ -121,7 +129,7 @@ ai-backend/
 
 ### Entry Points
 
-**`main.py`** — FastAPI application factory. Creates the `FastAPI` app instance titled "Jarvis AI", calls `init_db()` to ensure the SQLite schema exists, and registers all HTTP routes via `app.include_router(router)`. On startup, it calls `load_start_menu_apps()` to pre-cache all installed Windows apps. Also exposes `setup_voice(voice_manager)` — a helper that wires the `voice_command_callback` into any `VoiceInputManager` instance, keeping voice setup decoupled from the HTTP server.
+**`main.py`** — FastAPI application factory. Creates the `FastAPI` app instance titled "Jarvis AI", calls `init_db()` to ensure the SQLite schema exists, and registers all HTTP routes via `app.include_router(router)`. On startup calls `load_start_menu_apps()` to pre-cache all installed Windows apps. Also exposes `setup_voice(voice_manager)` to wire `voice_command_callback` into any `VoiceInputManager` instance, keeping voice setup decoupled from the HTTP server.
 
 **`run_voice.py`** — Standalone voice-mode entry point. Initialises the database, loads the app cache, pre-warms the TTS worker thread so pyttsx3 COM initialisation happens immediately (not mid-command), then creates a `VoiceInputManager` with the configured Whisper model, registers `voice_command_callback`, and calls `start_listening(background=False)` to block forever in the mic loop. Includes a `KeyboardInterrupt` handler for clean shutdown.
 
@@ -146,112 +154,114 @@ Both `/chat` and `/execute` are functionally equivalent — both call `execute_c
 
 ### `core/` — Business Logic Layer
 
-**`command_executor.py`** — The single entry point for all command processing regardless of origin (voice, HTTP, CLI, tests). The `execute_command(command, context)` function: (1) calls `parse_intent()` to extract intent name and entities; (2) injects the raw command string into `context["raw_command"]`; (3) looks up the handler in the `HANDLERS` dict (16 intents registered); (4) calls the handler with `(entities, context)`; (5) stamps the `intent` key onto the response for debugging; (6) catches all exceptions and returns a safe error dict. The `HANDLERS` dict maps every supported intent string to its handler callable — no if/elif chain needed.
+**`command_executor.py`** — The single public entry point for all command processing. `execute_command(command, context)` first calls `split_commands()` to detect chained input. If two or more sub-commands are found, it delegates to `execute_chain(commands, execute_single)` and returns a `Chain_Response`. For a single command it calls `execute_single()` directly and returns a standard `ResponseDict`. Also defines `handle_reminder()` (stub) and the `HANDLERS` dict mapping all 17 supported intent strings to their handler callables.
 
-**`intent_parser.py`** — Rule-based NLP pipeline. `parse_intent(text)` normalises input to lowercase, then runs a priority-ordered chain of `re.search()` checks to assign one of 16 intents. Entity extraction is handled by private helpers: `_extract_task_name()` (regex against intent-specific patterns), `_extract_url()` (URL regex + known website alias matching), `_extract_search_query()` (Google/search pattern matching), `_extract_application()` (substring scan against `KNOWN_APPS` list), `_extract_volume_action()` / `_extract_media_action()` (keyword checks), `_extract_priority()`, `_extract_category()`, `_extract_date()`. Returns `{"intent", "entities", "confidence"}` where confidence is a heuristic float (0.5–0.95) based on whether key entities were found.
+**`command_chain.py`** — Full command-chaining pipeline. Three public functions:
+- `split_commands(text)` — splits a compound utterance at connector keywords (`and`, `then`, `also`, `after that`, `,`) while protecting quoted strings and URLs from being broken. Returns a list of trimmed sub-command strings.
+- `execute_chain(commands, execute_fn)` — executes sub-commands sequentially, respecting dependency rules. Calls `execute_fn` (injected to avoid circular imports) for each non-skipped command, updates `ExecutionContext` after each step, and returns a `Chain_Response` with aggregated `status` (`success` / `partial` / `error`), combined `reply`, and a `payload` containing `executed_commands` and per-command `results`.
+- Private helpers: `_is_dependent(cmd, prev_intent)` — detects pronoun references (`it`, `that`, `there`, `this app`, `this window`) and media-after-app patterns; `_update_context(ec, cmd, result)` — updates `last_app`, `last_window`, `last_website`, `last_intent`, `last_command` from the result dict.
 
-**`response_builder.py`** — Lightweight factory module. Three functions — `success(reply, payload, metadata)`, `error(reply, payload, metadata)`, `partial(reply, payload, metadata)` — each return a consistently structured dict with a `status` key (`"success"`, `"error"`, `"partial"`), a `reply` string for the user, and optional `payload` and `metadata` dicts. Every handler uses these rather than constructing raw dicts, ensuring consistent response shape across all code paths.
+**`execution_context.py`** — `ExecutionContext` dataclass. Carries shared state between sub-commands in a chain: `last_app`, `last_window`, `last_website`, `last_command`, `last_intent`. Initialised fresh at the start of every `execute_chain()` call. Has zero project imports (only `dataclasses` and `typing`) to stay at the bottom of the dependency graph and prevent circular imports.
 
-**`conversation.py`** — `ConversationManager` class backed by a `collections.deque` with a configurable max length (default 20 messages). Stores alternating `user`/`assistant` message dicts. Provides `add_user()`, `add_assistant()`, `get_history()`, and `clear()`. Currently instantiated but not yet wired into the main command pipeline — available for multi-turn conversation context when needed.
+**`intent_parser.py`** — Rule-based NLP pipeline. `parse_intent(text)` normalises input to lowercase, then runs a priority-ordered chain of `re.search()` checks to assign one of 16 intents. Entity extraction is handled by private helpers for task name, URL, search query, application name, volume/media actions, priority, category, and date. Returns `{"intent", "entities", "confidence"}` where confidence is a heuristic float (0.5–0.95).
 
-**`prompt_builder.py`** — Builds structured prompt strings for the LLM. Prepends a system context block and injects conversation history before the current user message, giving the LLM context about prior turns.
+**`response_builder.py`** — Lightweight factory module. `success()`, `error()`, `partial()` each return a consistently structured dict with a `status` key, a `reply` string, and optional `payload` and `metadata` dicts. Every handler uses these for consistent response shape.
+
+**`conversation.py`** — `ConversationManager` class backed by a `collections.deque` (max 20 messages). Stores alternating `user`/`assistant` message dicts. Available for multi-turn context when needed.
+
+**`prompt_builder.py`** — Builds structured prompt strings for the LLM. Prepends a system context block and injects conversation history before the current user message.
 
 **`memory.py`** — In-memory key/value store for session state within a single run. Not persisted to disk.
 
-**`intent_router.py`** — Legacy routing module kept for reference. Its logic has been superseded by the `HANDLERS` dict in `command_executor.py`.
+**`intent_router.py`** — Legacy routing module kept for reference; superseded by the `HANDLERS` dict in `command_executor.py`.
 
 ---
 
 ### `handlers/` — Intent Handler Layer
 
-All handlers follow the same contract: `handle_*(entities: dict, context: dict | None) -> ResponseDict`. They have **no voice imports** and **no HTTP framework imports** — they are pure business logic.
+All handlers follow the same contract: `handle_*(entities: dict, context: dict | None) -> ResponseDict`. They have **no voice imports** and **no HTTP framework imports**.
 
-**`task_handler.py`** — Five handlers for task management:
-- `handle_add_task` — reads `task_name`, `date`, `category`, `priority` from entities; calls `add_task()` from `task_manager`; returns the created task object in `payload`.
-- `handle_show_tasks` — calls `get_tasks(include_completed)`; formats each task with a ✓/○ status icon and optional due date; returns the full task list in `payload["tasks"]`.
-- `handle_complete_task` — accepts either `task_name` or `task_id` as identifier; calls `complete_task()`; returns the updated task in `payload`.
-- `handle_show_stats` — calls `get_task_stats()`; formats a human-readable summary (`"N pending and M completed tasks"`).
-- `handle_update_task` — stub, returns a placeholder reply (not yet implemented).
+**`task_handler.py`** — Five handlers: `handle_add_task`, `handle_show_tasks`, `handle_complete_task`, `handle_show_stats`, `handle_update_task` (stub). Each is fully documented with docstrings, type hints, and usage examples.
 
-**`browser_handler.py`** — Two handlers: `handle_open_website` opens a URL (from `entities["url"]`) in the default browser via `browser_manager`; `handle_search_web` constructs a Google search URL from `entities["search_query"]` and opens it.
+**`browser_handler.py`** — `handle_open_website` opens a URL in the default browser; `handle_search_web` constructs a Google search URL from the query and opens it.
 
-**`app_handler.py`** — Two handlers: `handle_open_application` looks up the app name from `entities["app_name"]` and calls `app_manager.open_app()`; `handle_close_application` calls `app_manager.close_app()`.
+**`app_handler.py`** — `handle_open_application` and `handle_close_application` delegate to `app_manager`.
 
-**`system_handler.py`** — Three handlers: `handle_lock_pc` calls `system_manager.lock_screen()`; `handle_screenshot` calls `system_manager.take_screenshot()` and returns the saved file path; `handle_volume_control` reads `entities["volume_action"]` (`mute`/`unmute`/`up`/`down`) and calls the corresponding `system_manager` function.
+**`system_handler.py`** — `handle_lock_pc`, `handle_screenshot` (returns saved file path), `handle_volume_control` (mute/unmute/up/down).
 
-**`media_handler.py`** — Two handlers: `handle_play_music` reads `entities["media_query"]` and calls `media_manager.play(query)`; `handle_media_control` reads `entities["media_action"]` and dispatches to pause/resume/next/previous controls.
+**`media_handler.py`** — `handle_play_music` and `handle_media_control` (pause/resume/next/previous).
 
-**`chat_handler.py`** — Single handler `handle_general_chat`, used as both the explicit chat handler and the fallback for any unrecognised intent. Reads `context["raw_command"]`, streams a response from Ollama via `ollama_service.send_message()`, joins all chunks, and returns the result. Handles `OllamaConnectionError` (service not running) and empty-reply cases with distinct error messages.
+**`chat_handler.py`** — `handle_general_chat`: reads `context["raw_command"]`, streams a response from Ollama via `ollama_service.send_message()`, handles `OllamaConnectionError` and empty replies.
 
 ---
 
 ### `adapters/` — Integration Bridge
 
-**`voice_adapter.py`** — The **sole** file allowed to import from both `voice/` and `core/`. Contains two functions:
-- `format_for_voice(text)` — strips markdown formatting (fenced code blocks, inline code, bold/italic markers, link syntax, heading markers, list bullets) and collapses whitespace so the output sounds natural when read by TTS.
-- `voice_command_callback(command_text)` — registered as the `on_command` callback on `VoiceInputManager`. Validates non-empty input, calls `execute_command()`, extracts `reply` and `status` from the response, applies `format_for_voice()`, and calls `speak()`. Any exception is caught and spoken as a fallback error message so the user always hears audio feedback.
+**`voice_adapter.py`** — The **sole** file allowed to import from both `voice/` and `core/`. Contains:
+- `format_for_voice(text)` — strips markdown formatting so output sounds natural when read by TTS.
+- `voice_command_callback(command_text)` — registered as the `on_command` callback on `VoiceInputManager`. Calls `execute_command()`, extracts `reply`, applies `format_for_voice()`, and calls `speak()`. Any exception is caught and spoken as fallback audio.
 
 ---
 
 ### `voice/` — Audio I/O Layer
 
-Handles all audio concerns and nothing else. Has **no imports from `core/`, `handlers/`, or `managers/`**.
+Handles all audio concerns. Has **no imports from `core/`, `handlers/`, or `managers/`**.
 
-**`stt.py`** — `VoiceInputManager`: captures mic audio, runs Whisper transcription in a background thread, and dispatches the transcript string to the registered callback. The Whisper model loads lazily when `start_listening()` is first called (takes 1–3 min on first run). Supports both blocking and non-blocking listening modes.
+**`stt.py`** — `VoiceInputManager`: captures mic audio, runs Whisper transcription in a background thread, dispatches transcript to the registered callback. Supports blocking and non-blocking modes.
 
-**`tts.py`** — `TTSManager`: wraps pyttsx3 with a thread-safe priority queue and a dedicated worker thread. All `speak()` calls are serialised through this queue so TTS never blocks the main thread or the voice callback thread. `_default_tts_manager` is a module-level singleton pre-warmed at startup.
+**`tts.py`** — `TTSManager`: wraps pyttsx3 with a thread-safe priority queue and dedicated worker thread. All `speak()` calls are serialised so TTS never blocks the main thread.
 
-**`wake_word.py`** — `contains_wake_word(text)`: simple case-insensitive substring check against a configurable wake word list. Used to filter transcripts before dispatching as commands.
+**`wake_word.py`** — `contains_wake_word(text)`: case-insensitive substring check against a configurable wake word list.
 
 ---
 
 ### `managers/` — OS & Resource Manager Layer
 
-Thin wrappers around OS-level operations. Called only by handlers, never directly by API routes or voice code.
+Thin wrappers around OS-level operations. Called only by handlers.
 
-**`app_manager.py`** — Caches all Start Menu `.lnk` shortcuts at startup into a dict keyed by lowercased app name. `open_app(name)` does a fuzzy lookup against the cache and launches the app; `close_app(name)` finds matching windows and closes them.
+**`app_manager.py`** — Caches Start Menu shortcuts at startup; fuzzy-launches and closes apps by name.
 
-**`browser_manager.py`** — Calls `webbrowser.open(url)` for website opening. Handles URL normalisation (adds `https://` prefix when missing).
+**`browser_manager.py`** — Calls `webbrowser.open(url)` with URL normalisation.
 
-**`media_manager.py`** — Uses platform media keys or search-based launching (e.g., opens Spotify search URL) to control media playback.
+**`media_manager.py`** — Search-based media launching and playback control.
 
-**`system_manager.py`** — OS-level actions using `ctypes` / `subprocess`: `lock_screen()` calls the Windows lock API, `take_screenshot()` uses `PIL.ImageGrab` and saves to `data/screenshots/`, and volume functions use `pycaw` or `nircmd` for mute/unmute/up/down.
+**`system_manager.py`** — `lock_screen()`, `take_screenshot()` (PIL), volume functions via `pycaw`/`nircmd`.
 
-**`task_manager.py`** — A thin re-export shim that publishes `add_task`, `complete_task`, `delete_task`, `find_task`, `get_task_stats`, `get_tasks`, `update_task` from `database.task_repository`. Handlers import from `managers.task_manager` rather than directly from `database` to maintain layer separation.
+**`task_manager.py`** — Thin re-export shim: publishes `add_task`, `complete_task`, `delete_task`, `find_task`, `get_task_stats`, `get_tasks`, `update_task` from `database.task_repository`.
 
-**`window_manager.py`** — Uses `pygetwindow` to enumerate open windows, match by title substring, and perform minimize/maximize/focus/close operations.
+**`window_manager.py`** — Uses `pygetwindow` to minimise, maximise, focus, or close windows by title substring.
 
 ---
 
 ### `services/` — External Service Clients
 
-**`ollama_service.py`** — `OllamaClient` class and `send_message(text)` generator function. Posts messages to the Ollama HTTP API (`/api/chat`) and yields response chunks as they stream in. Raises `OllamaConnectionError` (a custom exception) when the service is unreachable, so handlers can present a user-friendly message without catching raw `requests` exceptions.
-
-**`whisper_service.py`** — Standalone wrapper for transcribing a pre-recorded audio file with Whisper. Used for batch transcription scenarios outside the real-time mic loop.
+**`ollama_service.py`** — `OllamaClient` and `send_message(text)` generator. Posts to Ollama HTTP API and yields response chunks. Raises `OllamaConnectionError` when the service is unreachable.
 
 **`llm_service.py`** — Re-exports `OllamaClient`, `send_message`, and `parse_intent` as a unified LLM service surface.
+
+**`whisper_service.py`** — Alias shim only: re-exports `VoiceInputManager` from `voice.stt` as `WhisperService` for backward compatibility. Contains no standalone logic.
 
 ---
 
 ### `database/` — Persistence Layer
 
-**`db.py`** — Creates and manages a SQLite connection using the path `data/nova.db`. Provides a `get_connection()` helper and manages schema initialisation.
+**`db.py`** — SQLite connection to `data/nova.db`. Provides `get_connection()` and manages schema initialisation.
 
-**`models.py`** — `TaskRecord` dataclass with fields: `id` (int), `task_name` (str), `date` (optional str), `category` (optional str), `priority` (optional str), `completed` (bool, default False), `created_at` and `updated_at` timestamps.
+**`models.py`** — `TaskRecord` dataclass: `id`, `task_name`, `date`, `category`, `priority`, `completed` (bool), `created_at`, `updated_at`.
 
-**`task_repository.py`** — All raw SQL for task operations: `add_task()` inserts a new row and returns the created `TaskRecord` as a dict; `get_tasks(include_completed)` returns a list of task dicts; `complete_task(identifier)` updates `completed=True` by name or ID; `delete_task(task_id)` removes by ID; `find_task(identifier)` does a name/ID lookup; `get_task_stats()` returns `{"pending": N, "completed": M, "total": T}`.
+**`task_repository.py`** — All raw SQL for task operations: `add_task()`, `get_tasks()`, `complete_task()`, `delete_task()`, `find_task()`, `get_task_stats()`.
 
 ---
 
 ### `utils/` — Shared Utilities
 
-**`constants.py`** — Single source of truth for string constants: the `KNOWN_APPS` list used by the intent parser, website alias mappings (e.g., `"youtube"` → `"https://youtube.com"`), and intent keyword sets.
+**`constants.py`** — `KNOWN_APPS` list, website alias mappings, and intent keyword sets.
 
-**`entity_matcher.py`** — `match_website(text)` uses `difflib.get_close_matches` for fuzzy website name resolution. Also provides app name fuzzy matching used when a substring match in `KNOWN_APPS` is insufficient.
+**`entity_matcher.py`** — `match_website(name)`: uses `difflib.get_close_matches` (cutoff 0.75) against `KNOWN_WEBSITES` to resolve fuzzy website names. Returns the best match string or `None`.
 
-**`logger.py`** — Configures a module-level `logging.Logger` with consistent format and log level. All modules obtain their logger via `logging.getLogger(__name__)`.
+**`logger.py`** — Configures a module-level `logging.Logger` with consistent format and log level.
 
-**`transcript_corrector.py`** — Post-processes raw Whisper output to fix recurring misrecognitions (e.g., "nova" misheard as "nova", punctuation artifacts). Applied before the transcript reaches the intent parser.
+**`transcript_corrector.py`** — LLM-powered transcript cleanup. `cleanup_task_command(command)` sends the raw Whisper transcript to Ollama with a focused correction prompt (fix STT mistakes, preserve meaning, return only the corrected command). Falls back to the original command if the LLM call fails.
 
 ---
 
@@ -260,19 +270,25 @@ Thin wrappers around OS-level operations. Called only by handlers, never directl
 This project follows a **three-layer architecture** to cleanly separate voice I/O from business logic:
 
 ```
-Input Layer          Core Layer              Output Layer
-────────────         ──────────              ────────────
-voice/stt.py    →    command_executor   →    voice/tts.py  (via voice_adapter)
-api/routes.py   →    + handlers/*       →    JSON response (via FastAPI)
+Input Layer          Core Layer                        Output Layer
+────────────         ──────────                        ────────────
+voice/stt.py    →    command_executor                  voice/tts.py  (via voice_adapter)
+api/routes.py   →      ├─ split_commands()         →   JSON response (via FastAPI)
+                        ├─ execute_chain()
+                        │     └─ execute_single() × N
+                        └─ execute_single()
+                              ├─ intent_parser
+                              └─ HANDLERS[intent]
 ```
 
-**Key dependency rule**: `voice/` and `core/` never import each other. `adapters/voice_adapter.py` is the **only** module allowed to import both, acting as the integration bridge.
+**Key dependency rules:**
+- `voice/` and `core/` never import each other. `adapters/voice_adapter.py` is the **only** module allowed to import both.
+- `core/command_chain.py` never imports from `core/command_executor.py` — the execute function is injected as a parameter to prevent circular imports.
+- `core/execution_context.py` imports only from the Python standard library.
 
 ---
 
 ## Project Working Flow
-
-This section describes exactly what happens from the moment a user speaks a command (or sends an HTTP request) to the moment a response is returned.
 
 ### Mode A — Voice Mode (run_voice.py)
 
@@ -281,35 +297,25 @@ Microphone
     │
     ▼
 voice/stt.py :: VoiceInputManager
-    │  Captures raw PCM audio chunks from the mic
-    │  Runs Whisper model in a background thread
-    │  Produces a transcript string (e.g. "Add task to learn Docker")
+    │  Captures PCM audio, runs Whisper in background thread
+    │  Produces transcript string (e.g. "Open Spotify and play Shape of You")
     │
     ▼  [on_command callback fires]
 adapters/voice_adapter.py :: voice_command_callback(command_text)
     │  Validates non-empty input
     │  Calls execute_command(command_text)
     │         ↓ (see Core Pipeline below)
-    │  Receives ResponseDict back
+    │  Receives ResponseDict or Chain_Response
     │  Extracts reply string
     │  Calls format_for_voice(reply) → strips markdown
     │
     ▼
 voice/tts.py :: speak(cleaned_reply)
     │  Enqueues reply in TTS priority queue
-    │  Dedicated worker thread picks it up
-    │  pyttsx3 synthesises and plays audio
+    │  Dedicated worker thread synthesises and plays audio
     ▼
 User hears the response
 ```
-
-**Startup sequence (run_voice.py):**
-1. `init_db()` — ensures `data/nova.db` schema exists
-2. `load_start_menu_apps()` — scans Windows Start Menu, builds app name → path cache
-3. `_default_tts_manager._ensure_worker()` — pre-warms pyttsx3 COM initialisation
-4. `VoiceInputManager(model_name=VOICE_MODEL)` — creates manager (Whisper loads when listening starts)
-5. `vm.on_command(voice_command_callback)` — registers the adapter callback
-6. `vm.start_listening(background=False)` — blocks; Whisper model downloads/loads, then mic opens
 
 ---
 
@@ -317,101 +323,120 @@ User hears the response
 
 ```
 HTTP Client
-    │  POST /execute  {"message": "Add task to learn Docker"}
+    │  POST /execute  {"message": "Open Chrome and search openai"}
     ▼
 api/routes.py :: execute(request)
     │  Extracts request.message
     │  Calls execute_command(message)
     │         ↓ (see Core Pipeline below)
-    │  Receives ResponseDict
+    │  Receives ResponseDict or Chain_Response
     ▼
 FastAPI serialises dict → JSON response to client
 ```
-
-**Startup sequence (main.py):**
-1. `FastAPI` app is created
-2. `init_db()` — ensures schema exists
-3. `app.include_router(router)` — mounts all routes
-4. On first request: `startup_event()` fires → `load_start_menu_apps()`
 
 ---
 
 ### Core Pipeline — execute_command(command, context)
 
-Both voice mode and HTTP mode converge here. This pipeline runs identically regardless of caller.
+Both modes converge here. The pipeline now handles both single commands and chained commands.
 
+```
+execute_command("Open Spotify and play Shape of You")
+    │
+    ├─ Step 1: Chain Detection
+    │     core/command_chain.py :: split_commands(command)
+    │     │  Protects quoted strings and URLs from being split
+    │     │  Splits on "and", "then", "also", "after that", ","
+    │     └─ Returns ["Open Spotify", "play Shape of You"]  ← 2 sub-commands found
+    │
+    ├─ Step 2: Chain Execution (len >= 2)
+    │     core/command_chain.py :: execute_chain(commands, execute_single)
+    │     │
+    │     │  Sub-command 1: "Open Spotify"
+    │     │  ├─ _is_dependent("Open Spotify", None) → False
+    │     │  ├─ execute_single("Open Spotify", ctx)
+    │     │  │     parse_intent → intent="open_application", entities={"app_name": "spotify"}
+    │     │  │     HANDLERS["open_application"] → handle_open_application
+    │     │  │     Returns {"status": "success", "reply": "Opening Spotify", "intent": "open_application", ...}
+    │     │  └─ _update_context(ec, "Open Spotify", result)
+    │     │        ec.last_app = "spotify", ec.last_intent = "open_application"
+    │     │
+    │     │  Sub-command 2: "play Shape of You"
+    │     │  ├─ _is_dependent("play Shape of You", "open_application")
+    │     │  │     parse_intent → intent="play_music"  (media intent after open_application → True)
+    │     │  ├─ prev_result.status == "success" → not skipped → execute
+    │     │  ├─ execute_single("play Shape of You", ctx)
+    │     │  │     parse_intent → intent="play_music", entities={"media_query": "Shape of You"}
+    │     │  │     HANDLERS["play_music"] → handle_play_music
+    │     │  │     Returns {"status": "success", "reply": "Playing Shape of You", ...}
+    │     │  └─ _update_context(ec, ...)
+    │     │
+    │     └─ Status aggregation: 2 success, 0 error, 0 skipped → chain_status = "success"
+    │
+    └─ Returns Chain_Response:
+          {
+            "status": "success",
+            "reply": "Opening Spotify and Playing Shape of You",
+            "intent": "chain",
+            "payload": {
+              "executed_commands": ["Open Spotify", "play Shape of You"],
+              "results": [...]
+            }
+          }
+```
+
+**Single-command path** (no connector found):
 ```
 execute_command("Add task to learn Docker")
     │
-    ├─ Step 1: Intent Parsing
-    │     core/intent_parser.py :: parse_intent(command)
-    │     │  Normalises text to lowercase
-    │     │  Runs regex priority chain → assigns intent = "add_task"
-    │     │  Runs entity extractors:
-    │     │     _extract_task_name()   → "learn Docker"
-    │     │     _extract_priority()    → None
-    │     │     _extract_category()    → None
-    │     │     _extract_date()        → None
-    │     │     _extract_url()         → None
-    │     │     _extract_application() → None
-    │     │     ... (all other extractors return None)
-    │     │  Assigns confidence = 0.9 (intent + task_name found)
-    │     └─ Returns {"intent": "add_task", "entities": {...}, "confidence": 0.9}
+    ├─ split_commands → ["Add task to learn Docker"]  ← single element
     │
-    ├─ Step 2: Context Injection
-    │     Injects raw command string into context["raw_command"]
-    │     (Used by chat_handler as fallback for LLM queries)
+    └─ execute_single("Add task to learn Docker", context)
+          parse_intent → intent="add_task", entities={"task_name": "learn Docker", ...}
+          HANDLERS["add_task"] → handle_add_task
+          Returns {"status": "success", "reply": "Added task: learn Docker", ...}
+```
+
+---
+
+### Dependency Skip Logic
+
+When a dependent sub-command's prerequisite fails:
+
+```
+execute_chain(["open chrome", "maximize it"])
     │
-    ├─ Step 3: Handler Lookup
-    │     HANDLERS["add_task"] → handle_add_task
-    │     (Falls back to handle_general_chat for unknown intents)
+    │  Sub-command 1: "open chrome" → status="error"
     │
-    ├─ Step 4: Handler Execution
-    │     handlers/task_handler.py :: handle_add_task(entities, context)
-    │     │  Reads entities["task_name"] = "learn Docker"
-    │     │  Calls managers/task_manager.add_task(task_name, date, category, priority)
-    │     │        ↓
-    │     │        database/task_repository.py :: add_task(...)
-    │     │        │  Inserts row into SQLite nova.db
-    │     │        └─ Returns TaskRecord dict {"id": 42, "task_name": "learn Docker", ...}
-    │     └─ Returns success("Added task: learn Docker", payload=task_dict)
-    │           = {"status": "success", "reply": "Added task: learn Docker", "payload": {...}}
+    │  Sub-command 2: "maximize it"
+    │  ├─ _is_dependent("maximize it", "open_application")
+    │  │     pronoun "it" found → True
+    │  ├─ prev_result.status == "error" → prereq_failed = True
+    │  └─ SKIP — records:
+    │         {"status": "skipped", "reply": "Could not complete 'open chrome', so 'maximize it' was skipped."}
     │
-    └─ Step 5: Intent Stamping
-          Adds "intent": "add_task" to the response dict
-          Returns final ResponseDict to caller
+    └─ Status aggregation: 0 success, 1 error, 1 skipped → chain_status = "error"
 ```
 
 ---
 
 ### LLM Fallback Flow (general_chat / answer_question)
 
-When no specific intent is matched, or when a question is asked directly:
-
 ```
 execute_command("What is the capital of France?")
     │
-    ├─ parse_intent() → intent = "answer_question", entities = {}
-    ├─ HANDLERS["answer_question"] → handle_general_chat
-    │
-    └─ handlers/chat_handler.py :: handle_general_chat(entities, context)
-          │  Reads context["raw_command"] = "What is the capital of France?"
-          │  Calls services/ollama_service.send_message(raw_command)
-          │        │  HTTP POST to http://localhost:11434/api/chat
-          │        │  Streams response chunks
-          │        └─ Generator yields text chunks
-          │  Joins chunks → full reply string
-          └─ Returns success(reply)
+    ├─ split_commands → single command
+    ├─ parse_intent → intent="answer_question"
+    └─ handle_general_chat
+          Reads context["raw_command"]
+          Calls ollama_service.send_message(raw_command)
+          Streams and joins response chunks
+          Returns success(reply)
 ```
-
-If Ollama is not running, `OllamaConnectionError` is caught and a user-friendly
-error reply is returned instead of propagating the exception.
 
 ---
 
 ### Intent Detection Decision Tree
-
-The `parse_intent()` function evaluates conditions in this priority order:
 
 ```
 Input text (lowercased)
@@ -437,55 +462,74 @@ Input text (lowercased)
 
 ### Response Format
 
-Every response flowing through the system — regardless of intent or handler — uses the same dict shape:
-
+**Single-command `ResponseDict`:**
 ```python
 {
     "status":  "success" | "error" | "partial",
-    "reply":   "Human-readable text for the user",        # always present
-    "intent":  "add_task",                                 # stamped by execute_command
-    "payload": { ... },                                    # optional: task object, stats, etc.
-    "metadata": { ... },                                   # optional: debug info, confidence
+    "reply":   "Human-readable text for the user",
+    "intent":  "add_task",                           # stamped by execute_single
+    "payload": { ... },                              # optional task object, stats, etc.
+    "metadata": { ... },                             # optional debug info, confidence
 }
 ```
 
-- Voice mode reads only `reply`, strips markdown via `format_for_voice()`, and speaks it
-- HTTP mode returns the entire dict as JSON to the client
-- `status="partial"` is used when an operation partially succeeded (e.g., 2 of 3 tasks completed)
+**Multi-command `Chain_Response`:**
+```python
+{
+    "status":  "success" | "partial" | "error",
+    "reply":   "Opening Spotify and Playing Shape of You",   # joined with " and "
+    "intent":  "chain",                                      # always "chain"
+    "payload": {
+        "executed_commands": ["Open Spotify", "play Shape of You"],
+        "results": [
+            {"status": "success", "reply": "Opening Spotify", "intent": "open_application", ...},
+            {"status": "success", "reply": "Playing Shape of You", "intent": "play_music", ...},
+        ]
+    }
+}
+```
+
+Status aggregation rules for chains:
+- All results `success` → `"success"`
+- All results `error`/`skipped` and 0 successes → `"error"`
+- Mixed → `"partial"`
 
 ---
 
 ### Data Flow Diagram (Full System)
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Input Sources                           │
-│                                                                  │
-│  Microphone ──► voice/stt.py ──► voice_adapter.py ──┐          │
-│                                                       │          │
-│  HTTP Client ──► api/routes.py ──────────────────────┤          │
-└───────────────────────────────────────────────────────┼──────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                          Input Sources                              │
+│                                                                      │
+│  Microphone ──► voice/stt.py ──► voice_adapter.py ──┐              │
+│                                                       │              │
+│  HTTP Client ──► api/routes.py ──────────────────────┤              │
+└───────────────────────────────────────────────────────┼──────────────┘
                                                         │
                                                         ▼
-                              ┌─────────────────────────────────┐
-                              │   core/command_executor.py      │
-                              │   execute_command(text)         │
-                              │                                  │
-                              │  ┌──────────────────────────┐   │
-                              │  │  core/intent_parser.py   │   │
-                              │  │  parse_intent(text)      │   │
-                              │  └──────────────────────────┘   │
-                              │           │                       │
-                              │           ▼                       │
-                              │  HANDLERS[intent] → handler()    │
-                              └─────────────┬───────────────────┘
+                              ┌─────────────────────────────────────┐
+                              │   core/command_executor.py          │
+                              │   execute_command(text)             │
+                              │                                      │
+                              │  split_commands(text)               │
+                              │    ├─ single → execute_single()     │
+                              │    └─ chain  → execute_chain()      │
+                              │                    └─ execute_single() × N
+                              │                                      │
+                              │   core/intent_parser.py             │
+                              │   parse_intent(text)                │
+                              │           │                          │
+                              │           ▼                          │
+                              │   HANDLERS[intent] → handler()      │
+                              └─────────────┬───────────────────────┘
                                             │
-              ┌─────────────────────────────┼─────────────────────────┐
-              │                             │                          │
-              ▼                             ▼                          ▼
-    handlers/task_handler         handlers/chat_handler      handlers/system_handler
-    handlers/browser_handler      (Ollama LLM fallback)      handlers/app_handler
-    handlers/media_handler                 │                  handlers/...
+              ┌─────────────────────────────┼────────────────────────┐
+              │                             │                         │
+              ▼                             ▼                         ▼
+    handlers/task_handler         handlers/chat_handler     handlers/system_handler
+    handlers/browser_handler      (Ollama LLM fallback)     handlers/app_handler
+    handlers/media_handler                 │                 handlers/...
               │                            │
               ▼                            ▼
     managers/task_manager        services/ollama_service
@@ -499,10 +543,10 @@ Every response flowing through the system — regardless of intent or handler �
               │
               └──────────────────────────────────────────────────────┐
                                                                       ▼
-                              ┌─────────────────────────────────────────────┐
-                              │             ResponseDict                     │
-                              │  {"status", "reply", "intent", "payload"}   │
-                              └────────────────┬────────────────────────────┘
+                              ┌───────────────────────────────────────────────┐
+                              │         ResponseDict / Chain_Response         │
+                              │  {"status", "reply", "intent", "payload"}    │
+                              └────────────────┬──────────────────────────────┘
                                                │
               ┌────────────────────────────────┴───────────────┐
               │                                                  │
@@ -531,7 +575,12 @@ python run_voice.py
 uvicorn main:app --reload
 ```
 
-**Tests:**
+**Tests (all):**
 ```cmd
 python -m pytest tests/ -v
+```
+
+**Tests (command chaining only):**
+```cmd
+python -m pytest tests/test_command_chain.py -v
 ```
