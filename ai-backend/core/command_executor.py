@@ -31,6 +31,7 @@ Response helpers live in ``core/response_builder``.
 
 from typing import Any, Dict, Optional
 
+from core.command_chain import split_commands, execute_chain
 from core.intent_parser import parse_intent
 from handlers.task_handler import (
     handle_add_task,
@@ -95,6 +96,59 @@ HANDLERS: Dict[str, Any] = {
 
 
 # ============================================================================
+# Private single-command execution path
+# ============================================================================
+
+def execute_single(
+    command: str,
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    """Internal single-command execution path: intent parse → handler → response.
+
+    This function runs one command through the full pipeline without any
+    chain detection.  It must **not** call ``split_commands()`` or
+    ``execute_chain()`` — doing so would allow re-entrant chain execution.
+
+    Args:
+        command: A single raw command string.
+        context: Optional context dict (``raw_command`` is auto-populated).
+
+    Returns:
+        ResponseDict from the matched handler, with ``intent`` injected.
+    """
+    try:
+        # Parse intent using existing intent_parser
+        result = parse_intent(command)
+        intent = result["intent"]
+        entities = result["entities"]
+
+        # Inject raw command into context so handlers (especially general_chat) can access it
+        if context is None:
+            context = {}
+        context["raw_command"] = command
+
+        # Route to appropriate handler using simple dict lookup
+        handler = HANDLERS.get(intent, handle_general_chat)
+
+        # Call handler and get response
+        response = handler(entities, context)
+
+        # Ensure response includes intent for debugging
+        response["intent"] = intent
+
+        return response
+
+    except Exception as e:
+        # Error handling — return safe fallback dict
+        return {
+            "status": "error",
+            "reply": "I'm sorry, something went wrong processing that command.",
+            "payload": {"error": str(e)},
+            "intent": "unknown",
+        }
+
+
+# ============================================================================
 # Public API
 # ============================================================================
 
@@ -147,33 +201,7 @@ def execute_command(
         response = execute_command("How are you?")
         # {"status": "success", "reply": "I'm doing well! ...", "intent": "answer_question"}
     """
-    try:
-        # Parse intent using existing intent_parser
-        result = parse_intent(command)
-        intent = result["intent"]
-        entities = result["entities"]
-
-        # Inject raw command into context so handlers (especially general_chat) can access it
-        if context is None:
-            context = {}
-        context["raw_command"] = command
-
-        # Route to appropriate handler using simple dict lookup
-        handler = HANDLERS.get(intent, handle_general_chat)
-
-        # Call handler and get response
-        response = handler(entities, context)
-
-        # Ensure response includes intent for debugging
-        response["intent"] = intent
-
-        return response
-
-    except Exception as e:
-        # Error handling — return safe fallback dict
-        return {
-            "status": "error",
-            "reply": "I'm sorry, something went wrong processing that command.",
-            "payload": {"error": str(e)},
-            "intent": "unknown",
-        }
+    commands = split_commands(command)
+    if len(commands) >= 2:
+        return execute_chain(commands, execute_single)
+    return execute_single(command, context)
