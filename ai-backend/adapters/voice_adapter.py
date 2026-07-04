@@ -1,15 +1,35 @@
 """
 Voice Adapter — bridges Voice_Module callbacks to Command_Executor.
 
-This is the ONLY module that imports both voice and command_executor.
-It sits at the boundary between:
-  - Voice_Module  (voice I/O, no business logic)
-  - Command_Executor (business logic, no voice awareness)
+This is the **ONLY** module that imports from both ``voice/`` and
+``core/command_executor``.  It sits at the boundary between:
 
-Flow:
+- **Voice_Module** (``voice/``) — handles audio I/O, knows nothing about
+  business logic, managers, or command routing.
+- **Command_Executor** (``core/command_executor``) — handles intent routing and
+  business logic, knows nothing about voice, audio, or TTS.
+
+Architecture position::
+
     VoiceInputManager  →  voice_command_callback()  →  execute_command()
-                                                              ↓
-                                speak(reply)  ←  response dict
+                                                               ↓
+                               speak(reply)  ←  ResponseDict
+
+Usage — register the callback at application startup::
+
+    from voice import VoiceInputManager
+    from adapters.voice_adapter import voice_command_callback
+
+    voice_manager = VoiceInputManager(model_name="small")
+    voice_manager.on_command(voice_command_callback)
+    voice_manager.start_listening()
+
+Dependency rule
+---------------
+``voice/``  **MUST NOT** import from ``core/``, ``handlers/``, or ``managers/``.
+``core/command_executor``  **MUST NOT** import from ``voice/``.
+This adapter is the **sole integration point** and the only file allowed to
+cross that boundary.
 """
 from __future__ import annotations
 
@@ -27,17 +47,31 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def format_for_voice(text: str) -> str:
-    """
-    Strip markdown and clean up text so it sounds natural when read aloud.
+    """Strip markdown and clean up text so it sounds natural when read aloud.
 
-    Transformations applied:
-    - Remove bold/italic markers  (**text**, *text*)
-    - Remove inline code          (`code`)
-    - Remove fenced code blocks   (```...```)
-    - Convert markdown links      [label](url)  →  label
-    - Remove heading markers      (# Heading)
-    - Remove bullet/list markers  (- item, * item, 1. item)
-    - Collapse extra whitespace
+    Transformations applied (in order):
+
+    1. Remove fenced code blocks (``\\`\\`\\`...\\`\\`\\``).
+    2. Remove inline code backticks but keep the content.
+    3. Remove bold (``**`` / ``__``) and italic (``*`` / ``_``) markers.
+    4. Convert markdown links ``[label](url)`` → ``label``.
+    5. Remove heading markers (``#``, ``##``, …).
+    6. Remove list markers (``-``, ``*``, ``1.``, ``2.``, …).
+    7. Collapse multiple whitespace / newlines to a single space.
+
+    Args:
+        text: Raw reply text that may contain markdown formatting.
+
+    Returns:
+        Plain-text string suitable for TTS synthesis.
+
+    Example::
+
+        result = format_for_voice("**Added task:** `learn Docker`")
+        # "Added task: learn Docker"
+
+        result = format_for_voice("Here are your tasks:\\n- Task A\\n- Task B")
+        # "Here are your tasks: Task A Task B"
     """
     # Remove fenced code blocks entirely
     formatted = re.sub(r"```[\s\S]*?```", "", text)
@@ -71,15 +105,38 @@ def format_for_voice(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def voice_command_callback(command_text: str) -> None:
-    """
-    Handle a transcribed voice command.
+    """Handle a transcribed voice command end-to-end.
 
-    Registered with VoiceInputManager via::
+    This function is designed to be registered with
+    :class:`voice.VoiceInputManager` via :meth:`~voice.VoiceInputManager.on_command`::
 
         voice_manager.on_command(voice_command_callback)
 
+    When a voice command is transcribed, the flow is:
+
+    1. Validate that ``command_text`` is non-empty.
+    2. Call :func:`core.command_executor.execute_command` with the raw text.
+    3. Extract the ``"reply"`` value from the response dict.
+    4. Apply :func:`format_for_voice` to strip markdown.
+    5. Call :func:`voice.speak` with the cleaned reply.
+    6. On any exception, call :func:`voice.speak` with a fallback error message.
+
     Args:
-        command_text: Raw transcribed text from Voice_Module STT.
+        command_text: Raw transcribed text received from the STT engine
+            (e.g. ``"Add task to learn Docker"``).
+
+    Returns:
+        ``None``.  Side-effects only: calls ``speak()`` with the assistant reply.
+
+    Raises:
+        No exceptions are propagated.  All errors are caught and spoken aloud
+        so the user receives audio feedback even when something goes wrong.
+
+    Example::
+
+        # Registered automatically via on_command(); not normally called directly.
+        voice_command_callback("Show my tasks")
+        # → calls speak("Here are your tasks: …")
     """
     if not command_text or not command_text.strip():
         logger.debug("voice_command_callback received empty text, ignoring")

@@ -1,16 +1,54 @@
 """
-Browser handlers - handles open_browser (open_website) and search_web intents.
+Browser handlers - handles open_website and search_web intents.
+
+All functions in this module accept an ``entities`` dict (extracted by the intent
+parser) and an optional ``context`` dict.  They return a ``ResponseDict`` built with
+:mod:`core.response_builder` helpers.
+
+This module has NO voice imports and NO HTTP framework imports.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 from urllib.parse import quote_plus
 
 from core.response_builder import success, error
 from managers.browser_manager import open_website
 
+# Convenience alias for the structured response dict returned by every handler.
+ResponseDict = Dict[str, Any]
 
-def handle_open_website(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler for open_website intent - opens browser, websites, or performs web searches."""
+
+def handle_open_website(
+    entities: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    """Handle the ``open_website`` intent — open the browser at a URL or default homepage.
+
+    When no URL is provided the handler opens ``https://www.google.com`` as the
+    default browser homepage.  Bare hostnames (without a scheme) are upgraded to
+    ``https://`` automatically; single-word names without a dot are expanded to
+    ``https://www.<name>.com``.
+
+    Args:
+        entities: Intent entities.  Expected keys:
+
+            - ``url`` *(str, optional)* — URL or hostname to open.  When absent, the
+              default browser is opened to Google.
+
+        context: Optional session / request context (not used by this handler).
+
+    Returns:
+        ResponseDict with ``status="success"`` and the resolved URL in
+        ``payload["url"]``, or ``status="error"`` on failure.
+
+    Example::
+
+        result = handle_open_website({"url": "youtube"})
+        # {"status": "success", "reply": "Opening youtube.com", "payload": {"url": "https://www.youtube.com"}}
+
+        result = handle_open_website({})
+        # {"status": "success", "reply": "Opening browser", "payload": {"url": "https://www.google.com"}}
+    """
     url = entities.get("url")
 
     # If no URL provided, open default browser
@@ -48,8 +86,36 @@ def handle_open_website(entities: Dict, context: Optional[Dict] = None) -> Dict:
         )
 
 
-def handle_search_web(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler for search_web intent - performs web searches using Google."""
+def handle_search_web(
+    entities: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    """Handle the ``search_web`` intent — perform a Google web search.
+
+    Constructs a ``https://www.google.com/search?q=<query>`` URL and opens it
+    in the default browser.
+
+    Args:
+        entities: Intent entities.  Expected keys:
+
+            - ``search_query`` *(str, required)* — the search terms to look up.
+
+        context: Optional session / request context (not used by this handler).
+
+    Returns:
+        ResponseDict with ``status="success"`` and the search query and URL in
+        ``payload``, or ``status="error"`` when the query is missing or the
+        browser fails to open.
+
+    Example::
+
+        result = handle_search_web({"search_query": "Python tutorials"})
+        # {
+        #   "status": "success",
+        #   "reply": "Searching for Python tutorials",
+        #   "payload": {"query": "Python tutorials", "url": "https://www.google.com/search?q=Python+tutorials"}
+        # }
+    """
     search_query = entities.get("search_query")
 
     if not search_query:

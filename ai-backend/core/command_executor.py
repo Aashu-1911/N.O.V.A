@@ -1,15 +1,35 @@
 """
-Command Executor - Routing layer that dispatches intents to handler functions.
+Command Executor — thin routing layer that dispatches intents to handler functions.
 
-This module:
-1. Parses intent using intent_parser
-2. Routes to the appropriate handler via the HANDLERS dict
-3. Returns standardized response dict: {"status": "...", "reply": "...", "payload": {...}}
+Architecture position
+---------------------
+This module sits at the centre of the three-layer architecture::
 
-Handler implementations live in handlers/*.
+    INPUT ADAPTERS          CORE LAYER              OUTPUT / ADAPTERS
+    ──────────────          ──────────              ─────────────────
+    adapters/voice_adapter  →  command_executor  →  (response dict returned)
+    api/routes.py           →        ↑
+                               handlers/*
+                               core/response_builder
+
+Responsibilities
+----------------
+1. Parse the raw command string into an intent + entities via ``intent_parser``.
+2. Look up the appropriate handler in the ``HANDLERS`` dict.
+3. Call the handler and return its standardised response dict.
+4. Inject the intent name into the response for debugging.
+5. Catch unexpected exceptions and return a safe error response.
+
+**This module has NO voice imports and NO HTTP framework imports.**
+It is intentionally interface-agnostic: it does not call ``speak()``, does not
+import FastAPI, and does not know whether the caller is a voice adapter, an HTTP
+route, a GUI, or a CLI.
+
+Handler implementations live in ``handlers/``.
+Response helpers live in ``core/response_builder``.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from core.intent_parser import parse_intent
 from handlers.task_handler import (
@@ -25,21 +45,35 @@ from handlers.system_handler import handle_lock_pc, handle_screenshot, handle_vo
 from handlers.media_handler import handle_play_music, handle_media_control
 from handlers.chat_handler import handle_general_chat
 
+# Convenience alias used in this module and re-usable by callers.
+ResponseDict = Dict[str, Any]
 
-def handle_reminder(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for reminder intent."""
+
+def handle_reminder(
+    entities: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    """Stub handler for the ``reminder`` intent (not yet implemented).
+
+    Args:
+        entities: Intent entities (ignored by stub).
+        context: Optional session / request context (ignored by stub).
+
+    Returns:
+        ResponseDict with ``status="success"`` and a placeholder reply.
+    """
     return {
         "status": "success",
         "reply": "Handler not implemented yet - reminder",
-        "payload": {}
+        "payload": {},
     }
 
 
 # ============================================================================
-# Simple HANDLERS Dict - Maps intent to handler function
+# Simple HANDLERS Dict — maps intent name → handler callable
 # ============================================================================
 
-HANDLERS = {
+HANDLERS: Dict[str, Any] = {
     "add_task": handle_add_task,
     "show_tasks": handle_show_tasks,
     "complete_task": handle_complete_task,
@@ -61,28 +95,57 @@ HANDLERS = {
 
 
 # ============================================================================
-# Main Execute Command Function - Minimal routing layer
+# Public API
 # ============================================================================
 
-def execute_command(command: str, context: Optional[Dict] = None) -> Dict:
-    """
-    Execute a command by routing to appropriate handler.
+def execute_command(
+    command: str,
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    """Execute a natural-language command and return a structured response dict.
 
-    This is a THIN routing layer that:
-    1. Parses intent using intent_parser
-    2. Routes to handler using HANDLERS dict
-    3. Returns standardized response dict
+    This is the **single entry point** for all commands regardless of origin
+    (voice, HTTP, GUI, CLI, etc.).  The caller is responsible for any
+    interface-specific output (calling ``speak()``, serialising to JSON, etc.).
+
+    Steps performed:
+
+    1. Parse ``command`` into an intent + entities via :mod:`core.intent_parser`.
+    2. Inject ``command`` into ``context["raw_command"]`` so fallback handlers
+       (e.g. :func:`handlers.chat_handler.handle_general_chat`) can access it.
+    3. Look up the handler in :data:`HANDLERS`; fall back to
+       :func:`handlers.chat_handler.handle_general_chat` for unknown intents.
+    4. Call the handler and attach the ``intent`` key to the response.
 
     Args:
-        command: Command text (e.g., "Add task to learn Docker")
-        context: Optional context dict (user_id, session_id, etc.)
+        command: Raw command text (e.g. ``"Add task to learn Docker"``).
+        context: Optional context dict.  Common keys:
+
+            - ``raw_command`` — auto-populated by this function.
+            - ``user_id`` — optional user identifier for multi-user scenarios.
+            - ``session_id`` — optional session identifier.
 
     Returns:
-        Response dict with keys:
-        - status: "success" | "error" | "partial"
-        - reply: User-facing response text
-        - payload: Optional additional data
-        - intent: Intent name for debugging
+        ResponseDict with the following keys:
+
+        - ``status`` *(str)* — ``"success"``, ``"error"``, or ``"partial"``.
+        - ``reply`` *(str)* — human-readable response text for the user.
+        - ``intent`` *(str)* — detected intent name (useful for debugging).
+        - ``payload`` *(dict | None)* — optional additional structured data.
+        - ``metadata`` *(dict | None)* — optional debug / diagnostic data.
+
+    Example::
+
+        response = execute_command("Add task to learn Docker")
+        # {
+        #   "status": "success",
+        #   "reply": "Added task: learn Docker",
+        #   "intent": "add_task",
+        #   "payload": {"task_id": 42, ...},
+        # }
+
+        response = execute_command("How are you?")
+        # {"status": "success", "reply": "I'm doing well! ...", "intent": "answer_question"}
     """
     try:
         # Parse intent using existing intent_parser
@@ -107,10 +170,10 @@ def execute_command(command: str, context: Optional[Dict] = None) -> Dict:
         return response
 
     except Exception as e:
-        # Error handling - return manual dict
+        # Error handling — return safe fallback dict
         return {
             "status": "error",
             "reply": "I'm sorry, something went wrong processing that command.",
             "payload": {"error": str(e)},
-            "intent": "unknown"
+            "intent": "unknown",
         }

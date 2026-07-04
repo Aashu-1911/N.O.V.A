@@ -1,15 +1,58 @@
 """
 Chat handler - handles general_chat and answer_question intents using the LLM.
+
+All functions accept an ``entities`` dict (extracted by the intent parser) and an
+optional ``context`` dict.  They return a ``ResponseDict`` built with
+:mod:`core.response_builder` helpers.
+
+This module has NO voice imports and NO HTTP framework imports.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from core.response_builder import success, error
 from services.ollama_service import send_message as ollama_send_message, OllamaConnectionError
 
+# Convenience alias for the structured response dict returned by every handler.
+ResponseDict = Dict[str, Any]
 
-def handle_general_chat(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler for general chat and fallback for unknown intents using LLM."""
+
+def handle_general_chat(
+    entities: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    """Handle general-chat and fallback intents by forwarding to the local LLM.
+
+    This handler is also used as the **fallback** for any intent that does not
+    have a dedicated handler in the HANDLERS dict.  It reads the original user
+    message from ``context["raw_command"]`` and streams a response from the
+    Ollama service.
+
+    Args:
+        entities: Intent entities (not used; the raw command is read from
+            ``context`` instead).
+        context: Optional session / request context.  Expected keys:
+
+            - ``raw_command`` *(str, required)* — the original user input
+              forwarded by :func:`core.command_executor.execute_command`.
+
+    Returns:
+        ResponseDict with ``status="success"`` and the LLM reply in ``reply``,
+        or ``status="error"`` if the Ollama service is unreachable, the reply is
+        empty, or an unexpected exception occurs.
+
+    Raises:
+        No exceptions are raised; all errors are returned as ``status="error"``
+        response dicts.
+
+    Example::
+
+        result = handle_general_chat(
+            {},
+            context={"raw_command": "What time is it in Tokyo?"},
+        )
+        # {"status": "success", "reply": "It is currently …"}
+    """
     raw_command = context.get("raw_command", "") if context else ""
 
     if not raw_command:
@@ -26,7 +69,10 @@ def handle_general_chat(entities: Dict, context: Optional[Dict] = None) -> Dict:
         return success(reply)
 
     except OllamaConnectionError:
-        return error("I'm unable to connect to the AI service right now. Please make sure Ollama is running.")
+        return error(
+            "I'm unable to connect to the AI service right now. "
+            "Please make sure Ollama is running."
+        )
     except Exception as e:
         return error(
             "I encountered an error processing your request. Please try again.",
