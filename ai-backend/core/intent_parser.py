@@ -26,6 +26,7 @@ KNOWN_APPS = [
     "powershell",
     "task manager",
     "steam",
+    "telegram",
 ]
 
 
@@ -217,6 +218,9 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         intent = "show_stats"
     elif re.search(r"\b(search|look up|find|google)\b", normalized) and _extract_search_query(text):
         intent = "search_web"
+    # Check for close BEFORE checking for application names
+    elif re.search(r"\b(close|exit|quit|terminate|kill)\b", normalized):
+        intent = "close_application"
     elif _extract_application(text):
         intent = "open_application"
     elif _extract_url(text) or re.search(r"\b(open|visit|website|site|browser)\b", normalized):
@@ -231,8 +235,6 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         intent = "volume_control"
     elif re.search(r"\b(play|pause|resume|next|previous|skip)\b", normalized):
         intent = "media_control"
-    elif re.search(r"\b(close|exit|quit|terminate|kill)\b", normalized):
-        intent = "close_application"
 
     entities = {
         "task_name": _extract_task_name(text, intent),

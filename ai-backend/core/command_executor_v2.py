@@ -15,6 +15,14 @@ from core.intent_parser import parse_intent
 from managers.task_manager import add_task, complete_task, get_tasks, get_task_stats
 from managers.browser_manager import open_website
 from managers.app_manager import open_application, close_application
+from managers.system_manager import (
+    lock_pc,
+    take_screenshot,
+    mute_volume,
+    unmute_volume,
+    volume_up,
+    volume_down
+)
 
 
 # ============================================================================
@@ -324,30 +332,85 @@ def handle_close_application(entities: Dict, context: Optional[Dict] = None) -> 
 
 
 def handle_lock_pc(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for lock_pc intent."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - lock_pc",
-        "payload": {}
-    }
+    """Handler for lock_pc intent."""
+    try:
+        lock_pc()
+        return {
+            "status": "success",
+            "reply": "Locking PC",
+            "payload": {}
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": f"Failed to lock PC: {str(e)}",
+            "payload": {"error": str(e)}
+        }
 
 
 def handle_screenshot(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for take_screenshot intent."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - take_screenshot",
-        "payload": {}
-    }
+    """Handler for take_screenshot intent."""
+    try:
+        filepath = take_screenshot()
+        return {
+            "status": "success",
+            "reply": "Screenshot taken",
+            "payload": {"filepath": filepath}
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": f"Failed to take screenshot: {str(e)}",
+            "payload": {"error": str(e)}
+        }
 
 
 def handle_volume_control(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for volume_control intent."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - volume_control",
-        "payload": {}
-    }
+    """Handler for volume_control intent - supports mute/unmute/up/down actions."""
+    action = entities.get("volume_action")  # intent_parser uses "volume_action" key
+    
+    if not action:
+        return {
+            "status": "error",
+            "reply": "I couldn't determine the volume action. Please specify mute, unmute, volume up, or volume down.",
+            "payload": {}
+        }
+    
+    try:
+        # Normalize action to lowercase for matching
+        action_lower = action.lower()
+        
+        if action_lower == "mute":
+            mute_volume()
+            reply = "Volume muted"
+        elif action_lower == "unmute":
+            unmute_volume()
+            reply = "Volume unmuted"
+        elif action_lower in ["up", "increase", "raise"]:
+            volume_up()
+            reply = "Volume increased"
+        elif action_lower in ["down", "decrease", "lower"]:
+            volume_down()
+            reply = "Volume decreased"
+        else:
+            return {
+                "status": "error",
+                "reply": f"Unknown volume action: {action}",
+                "payload": {"action": action}
+            }
+        
+        return {
+            "status": "success",
+            "reply": reply,
+            "payload": {"action": action}
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": f"Failed to control volume: {str(e)}",
+            "payload": {"error": str(e), "action": action}
+        }
 
 
 def handle_media_control(entities: Dict, context: Optional[Dict] = None) -> Dict:

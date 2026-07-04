@@ -2,12 +2,12 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from core.command_executor import (
-    execute_command,
     handle_chat_message,
     handle_voice_command,
     memory,
     voice_manager,
 )
+from core.command_executor_v2 import execute_command as execute_command_v2
 from core.intent_parser import parse_intent
 from managers.task_manager import delete_task, get_task_stats, get_tasks
 
@@ -58,7 +58,8 @@ def task_stats():
 
 @router.post("/execute")
 def execute(request: TaskActionRequest):
-    return execute_command(request.message, request.task_id)
+    # Use the new command_executor_v2 which has app handlers implemented
+    return execute_command_v2(request.message)
 
 
 @router.delete("/tasks")
