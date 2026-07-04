@@ -585,6 +585,7 @@ HANDLERS = {
     "play_music": handle_play_music,
     "reminder": handle_reminder,
     "answer_question": handle_general_chat,  # Default intent from intent_parser
+    "general_chat": handle_general_chat,      # Alias for explicit general_chat intent
 }
 
 

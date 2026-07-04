@@ -214,6 +214,8 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         intent = "update_task"
     elif re.search(r"\b(add|create|new task|remember to|remind me to)\b", normalized):
         intent = "add_task" if "remind me" not in normalized else "reminder"
+    elif re.search(r"\b(show|list|display|view|get)\b.*\btasks?\b", normalized) or re.search(r"\btasks?\b.*\b(show|list|display|view)\b", normalized):
+        intent = "show_tasks"
     elif re.search(r"\b(stats|statistics|progress|summary|status)\b", normalized):
         intent = "show_stats"
     elif re.search(r"\b(search|look up|find|google)\b", normalized) and _extract_search_query(text):
@@ -266,6 +268,8 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
 
     if intent == "add_task" and entities.get("task_name"):
         confidence = 0.9
+    elif intent == "show_tasks":
+        confidence = 0.95
     elif intent == "complete_task" and entities.get("task_name"):
         confidence = 0.9
     elif intent == "update_task" and entities.get("task_name"):
