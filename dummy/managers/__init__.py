@@ -1,1 +1,0 @@
-"""Managers for apps, browser, media, system, window, and tasks."""

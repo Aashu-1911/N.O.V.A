@@ -1,1 +1,0 @@
-from managers.browser_manager import open_website
