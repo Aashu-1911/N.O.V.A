@@ -12,6 +12,7 @@ DO NOT create response_builder yet - using manual dicts.
 
 from typing import Dict, Optional
 from core.intent_parser import parse_intent
+from services.ollama_service import send_message as ollama_send_message, OllamaConnectionError
 from managers.task_manager import add_task, complete_task, get_tasks, get_task_stats
 from managers.browser_manager import open_website
 from managers.app_manager import open_application, close_application
@@ -521,12 +522,46 @@ def handle_reminder(entities: Dict, context: Optional[Dict] = None) -> Dict:
 
 
 def handle_general_chat(entities: Dict, context: Optional[Dict] = None) -> Dict:
-    """Handler stub for general chat and fallback."""
-    return {
-        "status": "success",
-        "reply": "Handler not implemented yet - general_chat",
-        "payload": {}
-    }
+    """Handler for general chat and fallback for unknown intents using LLM."""
+    raw_command = context.get("raw_command", "") if context else ""
+
+    if not raw_command:
+        return {
+            "status": "error",
+            "reply": "I didn't receive any input to process.",
+            "payload": {}
+        }
+
+    try:
+        # Collect streaming response from Ollama LLM
+        chunks = list(ollama_send_message(raw_command))
+        reply = "".join(chunks).strip()
+
+        if not reply:
+            return {
+                "status": "error",
+                "reply": "I received an empty response. Please try again.",
+                "payload": {}
+            }
+
+        return {
+            "status": "success",
+            "reply": reply,
+            "payload": {}
+        }
+
+    except OllamaConnectionError:
+        return {
+            "status": "error",
+            "reply": "I'm unable to connect to the AI service right now. Please make sure Ollama is running.",
+            "payload": {}
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "reply": "I encountered an error processing your request. Please try again.",
+            "payload": {"error": str(e)}
+        }
 
 
 # ============================================================================
@@ -547,6 +582,7 @@ HANDLERS = {
     "take_screenshot": handle_screenshot,
     "volume_control": handle_volume_control,
     "media_control": handle_media_control,
+    "play_music": handle_play_music,
     "reminder": handle_reminder,
     "answer_question": handle_general_chat,  # Default intent from intent_parser
 }
@@ -581,7 +617,12 @@ def execute_command(command: str, context: Optional[Dict] = None) -> Dict:
         result = parse_intent(command)
         intent = result["intent"]
         entities = result["entities"]
-        
+
+        # Inject raw command into context so handlers (especially general_chat) can access it
+        if context is None:
+            context = {}
+        context["raw_command"] = command
+
         # Route to appropriate handler using simple dict lookup
         handler = HANDLERS.get(intent, handle_general_chat)
         
