@@ -219,7 +219,6 @@ class TTSManager:
     def speak(self, text: str, priority: str = "normal") -> None:
         """Speak text synchronously."""
         self._ensure_worker()
-        self.stop_current_speech()
         self._drain_queue()
         done_event = threading.Event()
         self._enqueue(text, priority=priority, done_event=done_event)
@@ -233,16 +232,16 @@ class TTSManager:
     def interrupt_and_speak(self, text: str) -> None:
         """Stop current speech and replace it with urgent text."""
         self._ensure_worker()
-        self.stop_current_speech()
         self._drain_queue()
         self._enqueue(text, priority="urgent", done_event=None)
 
     def stop_current_speech(self) -> None:
-        self._ensure_engine()
-        try:
-            self._engine.stop()
-        except Exception:
-            pass
+        """Signal the worker to stop after the current chunk finishes.
+        
+        Safe to call from any thread — does not touch the pyttsx3 engine directly.
+        Drains the queue so no further items are spoken.
+        """
+        self._drain_queue()
 
     def _enqueue(self, text: str, priority: str, done_event: Optional[threading.Event]) -> None:
         priority_value = self._priority_value(priority)
@@ -282,7 +281,6 @@ class TTSManager:
             return
 
         self._ensure_engine()
-        self.stop_current_speech()
 
         for index, chunk in enumerate(chunks):
             self._engine.say(chunk)

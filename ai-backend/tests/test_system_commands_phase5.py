@@ -6,13 +6,15 @@ Tests system commands through command_executor_v2
 import sys
 import os
 
+import pytest
+
 # Add parent directory to path to import modules
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core.command_executor import execute_command
 
 
-def test_command(command_text):
+def _run_command(command_text):
     """Test a command and print results"""
     print(f"\n{'='*60}")
     print(f"Testing: {command_text}")
@@ -57,7 +59,7 @@ def main():
     
     results = []
     for command in test_commands:
-        passed = test_command(command)
+        passed = _run_command(command)
         results.append((command, passed))
     
     # Summary

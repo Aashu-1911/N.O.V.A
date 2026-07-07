@@ -59,8 +59,9 @@ def handle_general_chat(
         return error("I didn't receive any input to process.")
 
     try:
-        # Collect streaming response from Ollama LLM
-        chunks = list(ollama_send_message(raw_command))
+        # Collect response chunks from Ollama LLM
+        # send_message now returns a List[str] with the connection properly closed
+        chunks = ollama_send_message(raw_command)
         reply = "".join(chunks).strip()
 
         if not reply:

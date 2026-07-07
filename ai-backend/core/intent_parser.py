@@ -155,6 +155,53 @@ def _extract_application(text: str):
     return None
 
 
+def _extract_window_name(text: str) -> Optional[str]:
+    pattern = (
+        r"(?:focus|maximize|minimize|minimise|restore|bring|switch to)\s+"
+        r"(.+?)(?:\s+to front|\s+window)?\s*$"
+    )
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    name = match.group(1).strip()
+    if name.lower() in {"it", "that", "this", "the window", "this window", "this app"}:
+        return None
+
+    return name
+
+
+def _extracted_name_is_known_app(name: str) -> bool:
+    lower_name = name.lower()
+    for app in KNOWN_APPS:
+        if app in lower_name or lower_name in app:
+            return True
+    return False
+
+
+def _is_window_action_context(normalized: str, text: str) -> bool:
+    is_pronoun = bool(
+        re.search(r"\b(it|that|this|this window|this app)\b", normalized)
+    )
+    has_window_keyword = bool(
+        re.search(r"\b(window|app|application)\b", normalized)
+    )
+    has_known_app = _extract_application(text) is not None
+    extracted = _extract_window_name(text)
+    extracted_is_known = bool(extracted and _extracted_name_is_known_app(extracted))
+    return bool(is_pronoun or has_window_keyword or has_known_app or extracted_is_known)
+
+
+_WINDOW_INTENTS = {
+    "focus_window",
+    "maximize_window",
+    "minimize_window",
+    "restore_window",
+    "list_windows",
+    "get_active_window",
+}
+
+
 def _extract_volume_action(text: str):
     text = text.lower()
 
@@ -208,18 +255,33 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     normalized = text.strip().lower()
     intent = "answer_question"
 
-    if re.search(r"\b(complete|finish|done|mark done|mark as done|completed)\b", normalized):
+    if re.search(r"\b(stats|statistics|progress|summary|status)\b", normalized):
+        intent = "show_stats"
+    elif re.search(r"\b(add|create|new task|remember to|remind me to)\b", normalized):
+        intent = "add_task" if "remind me" not in normalized else "reminder"
+    elif re.search(r"\b(complete|finish|done|mark done|mark as done|completed)\b", normalized):
         intent = "complete_task"
     elif re.search(r"\b(update|edit|change|modify)\b", normalized):
         intent = "update_task"
-    elif re.search(r"\b(add|create|new task|remember to|remind me to)\b", normalized):
-        intent = "add_task" if "remind me" not in normalized else "reminder"
     elif re.search(r"\b(show|list|display|view|get)\b.*\btasks?\b", normalized) or re.search(r"\btasks?\b.*\b(show|list|display|view)\b", normalized):
         intent = "show_tasks"
-    elif re.search(r"\b(stats|statistics|progress|summary|status)\b", normalized):
-        intent = "show_stats"
     elif re.search(r"\b(search|look up|find|google)\b", normalized) and _extract_search_query(text):
         intent = "search_web"
+    elif re.search(r"\b(active window|current window|which window)\b", normalized):
+        intent = "get_active_window"
+    elif (
+        re.search(r"\b(list|show|what).*(windows?)\b", normalized)
+        or re.search(r"\bwindows?\s+(are\s+)?open\b", normalized)
+    ):
+        intent = "list_windows"
+    elif re.search(r"\b(focus|bring .+ to front|switch to)\b", normalized):
+        intent = "focus_window"
+    elif re.search(r"\brestore\b", normalized) and _is_window_action_context(normalized, text):
+        intent = "restore_window"
+    elif re.search(r"\b(minimize|minimise)\b", normalized) and _is_window_action_context(normalized, text):
+        intent = "minimize_window"
+    elif re.search(r"\bmaximize\b", normalized) and _is_window_action_context(normalized, text):
+        intent = "maximize_window"
     # Check for close BEFORE checking for application names
     elif re.search(r"\b(close|exit|quit|terminate|kill)\b", normalized):
         intent = "close_application"
@@ -249,6 +311,7 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         "volume_action": _extract_volume_action(text),
         "media_action": _extract_media_action(text),
         "media_query": _extract_media_query(text),
+        "window_name": _extract_window_name(text) if intent in _WINDOW_INTENTS else None,
     }
 
     task_name = entities.get("task_name")
@@ -293,6 +356,8 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     elif intent == "media_control" and entities.get("media_action"):
         confidence = 0.95
     elif intent == "close_application" and entities.get("app_name"):
+        confidence = 0.95
+    elif intent in _WINDOW_INTENTS:
         confidence = 0.95
 
     return {

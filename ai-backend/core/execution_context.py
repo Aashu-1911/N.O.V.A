@@ -39,6 +39,7 @@ class ExecutionContext:
 
     last_app: Optional[str] = None
     last_window: Optional[str] = None
+    last_window_handle: Optional[int] = None
     last_website: Optional[str] = None
     last_command: Optional[str] = None
     last_intent: Optional[str] = None

@@ -45,6 +45,14 @@ from handlers.app_handler import handle_open_application, handle_close_applicati
 from handlers.system_handler import handle_lock_pc, handle_screenshot, handle_volume_control
 from handlers.media_handler import handle_play_music, handle_media_control
 from handlers.chat_handler import handle_general_chat
+from handlers.window_handler import (
+    handle_focus_window,
+    handle_maximize_window,
+    handle_minimize_window,
+    handle_restore_window,
+    handle_list_windows,
+    handle_get_active_window,
+)
 
 # Convenience alias used in this module and re-usable by callers.
 ResponseDict = Dict[str, Any]
@@ -90,6 +98,12 @@ HANDLERS: Dict[str, Any] = {
     "media_control": handle_media_control,
     "play_music": handle_play_music,
     "reminder": handle_reminder,
+    "focus_window": handle_focus_window,
+    "maximize_window": handle_maximize_window,
+    "minimize_window": handle_minimize_window,
+    "restore_window": handle_restore_window,
+    "list_windows": handle_list_windows,
+    "get_active_window": handle_get_active_window,
     "answer_question": handle_general_chat,  # Default intent from intent_parser
     "general_chat": handle_general_chat,      # Alias for explicit general_chat intent
 }

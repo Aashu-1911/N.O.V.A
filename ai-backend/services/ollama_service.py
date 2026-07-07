@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Dict, Generator, Iterable, List, Optional
+from typing import Dict, List, Iterable, Optional
 
 import httpx
 
@@ -51,7 +51,13 @@ class OllamaClient:
         history = list(conversation_history or [])[-10:]
         return ([{"role": "system", "content": SYSTEM_PROMPT}] + history + [{"role": "user", "content": user_message}])
 
-    def _stream_request(self, payload: Dict[str, object]) -> Generator[str, None, None]:
+    def _stream_request(self, payload: Dict[str, object]) -> List[str]:
+        """Stream a chat request and return all chunks as a list.
+        
+        The HTTP connection is fully consumed and closed before returning.
+        This prevents connection state leakage between requests.
+        """
+        chunks: List[str] = []
         try:
             print("CHAT URL:", f"{self.base_url}{CHAT_ENDPOINT}")
             print("MODEL:", payload.get("model"))
@@ -71,10 +77,12 @@ class OllamaClient:
                     message = chunk.get("message", {})
                     content = message.get("content", "")
                     if content:
-                        yield content
+                        chunks.append(content)
 
                     if chunk.get("done"):
                         break
+            
+            return chunks
         except httpx.ConnectError as exc:
             raise OllamaConnectionError(
                 "Could not connect to Ollama at http://localhost:11434. "
@@ -99,7 +107,13 @@ class OllamaClient:
         except httpx.HTTPError as exc:
             raise RuntimeError(f"Ollama request failed: {exc}") from exc
 
-    def _stream_generate(self, payload: Dict[str, object]) -> Generator[str, None, None]:
+    def _stream_generate(self, payload: Dict[str, object]) -> List[str]:
+        """Stream a generate request and return all chunks as a list.
+        
+        The HTTP connection is fully consumed and closed before returning.
+        This prevents connection state leakage between requests.
+        """
+        chunks: List[str] = []
         try:
             print("GENERATE URL:", f"{self.base_url}{GENERATE_ENDPOINT}")
             print("MODEL:", payload.get("model"))
@@ -118,10 +132,12 @@ class OllamaClient:
                     chunk = json.loads(line)
                     content = chunk.get("response", "")
                     if content:
-                        yield content
+                        chunks.append(content)
 
                     if chunk.get("done"):
                         break
+            
+            return chunks
         except httpx.ConnectError as exc:
             raise OllamaConnectionError(
                 "Could not connect to Ollama at http://localhost:11434. "
@@ -146,7 +162,12 @@ class OllamaClient:
         self,
         user_message: str,
         conversation_history: Optional[Iterable[Dict[str, str]]] = None,
-    ) -> Generator[str, None, None]:
+    ) -> List[str]:
+        """Send a chat message and return all response chunks.
+        
+        Returns a list of strings rather than a generator to ensure
+        the HTTP connection is properly closed before returning.
+        """
         payload = {
             "model": self.model,
             "messages": self._build_messages(user_message, conversation_history),
@@ -159,7 +180,12 @@ class OllamaClient:
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
-    ) -> Generator[str, None, None]:
+    ) -> List[str]:
+        """Generate text and return all response chunks.
+        
+        Returns a list of strings rather than a generator to ensure
+        the HTTP connection is properly closed before returning.
+        """
         payload = {
             "model": self.model,
             "prompt": prompt if system_prompt is None else f"{system_prompt}\n\n{prompt}",

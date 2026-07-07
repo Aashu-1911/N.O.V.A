@@ -53,6 +53,15 @@ _PRONOUN_SUBSTRING_TOKENS = ["this app", "this window"]
 # Intent values that qualify as media intents (for media-after-app check)
 _MEDIA_INTENTS = {"media_control", "play_music"}
 
+# Window intents that update last_window / last_window_handle on success
+_WINDOW_INTENTS = {
+    "focus_window",
+    "maximize_window",
+    "minimize_window",
+    "restore_window",
+    "get_active_window",
+}
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -225,6 +234,9 @@ def _update_context(ec: ExecutionContext, cmd: str, result: dict) -> None:
             ec.last_window = app_name  # placeholder until real window-title lookup
         elif intent == "open_website":
             ec.last_website = payload.get("url")
+        elif intent in _WINDOW_INTENTS:
+            ec.last_window = payload.get("window_title")
+            ec.last_window_handle = payload.get("window_handle")
 
 
 def execute_chain(
