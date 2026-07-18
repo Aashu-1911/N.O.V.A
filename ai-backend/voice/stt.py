@@ -1,16 +1,10 @@
-"""Voice input (STT) module for Jarvis — Phase 2.
+"""Voice input (STT) module for Jarvis — Push-To-Talk (PTT) Refactor.
 
 Features:
-- Capture microphone audio into temporary WAV files
-- Stop recording after speech ends and silence is detected
-- Transcribe audio with local Whisper (base or small by default)
-- Notify registered callbacks when a command is recognized
-
-Wake words and TTS are intentionally left for a later phase.
-
-Notes: This module prefers `whisper` (openai-whisper), `sounddevice`,
-`numpy`, `soundfile`, and optionally `webrtcvad` for better speech detection.
-If `soundfile` is missing, the stdlib `wave` writer is used instead.
+- Global low-level Windows keyboard hook using ctypes for Ctrl+Space hold/release
+- Asynchronous microphone capture using sounddevice
+- Whisper model transcribing local files
+- Explicit UI State tracking
 """
 from __future__ import annotations
 
@@ -24,6 +18,7 @@ import contextlib
 from pathlib import Path
 from typing import Callable, List, Optional
 import re
+import sys
 
 try:
     import sounddevice as sd
@@ -48,6 +43,14 @@ try:
 except Exception:  # pragma: no cover
     webrtcvad = None  # type: ignore
 
+# Import ctypes for low-level Windows keyboard hooking
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+else:
+    ctypes = None
+    wintypes = None
+
 
 def _ensure_audio_deps():
     if sd is None or np is None:
@@ -69,12 +72,142 @@ def _write_wav(path: str, data: "np.ndarray", samplerate: int = 16000):
         wf.writeframes(data16.tobytes())
 
 
-class VoiceInputManager:
-    """Manage wake-word detection and command capture.
+class KeyboardHookListener:
+    """Manages a low-level Windows keyboard hook for Ctrl+Space PTT."""
+    
+    def __init__(self, on_press: Callable[[], None], on_release: Callable[[], None]) -> None:
+        self.on_press = on_press
+        self.on_release = on_release
+        self.recording_active = False
+        self._thread: Optional[threading.Thread] = None
+        self._hook = None
+        self._hook_callback = None
+        self.ctrl_held = False
+        self.space_held = False
 
-    Call `on_command(callback)` to register callbacks that receive the
-    transcribed text. Callbacks are invoked with a single string argument.
-    """
+    def start(self) -> None:
+        if sys.platform != "win32" or ctypes is None:
+            print("[KEYBOARD] Global keyboard hook is only supported on Windows.")
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+        
+        class KBDLLHOOKSTRUCT(ctypes.Structure):
+            _fields_ = [
+                ("vkCode", wintypes.DWORD),
+                ("scanCode", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.c_ulonglong)
+            ]
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        # API settings
+        SetWindowsHookEx = user32.SetWindowsHookExW
+        SetWindowsHookEx.argtypes = [ctypes.c_int, HOOKPROC, wintypes.HINSTANCE, wintypes.DWORD]
+        SetWindowsHookEx.restype = wintypes.HHOOK
+
+        UnhookWindowsHookEx = user32.UnhookWindowsHookEx
+        UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+        UnhookWindowsHookEx.restype = wintypes.BOOL
+
+        CallNextHookEx = user32.CallNextHookEx
+        CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+        CallNextHookEx.restype = ctypes.c_int
+
+        WH_KEYBOARD_LL = 13
+        WM_KEYDOWN = 0x0100
+        WM_KEYUP = 0x0101
+        WM_SYSKEYDOWN = 0x0104
+        WM_SYSKEYUP = 0x0105
+
+        def hook_proc(nCode, wParam, lParam):
+            if nCode >= 0:
+                kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                vk = kb.vkCode
+
+                is_ctrl = vk in (0x11, 0xA2, 0xA3)
+                is_space = (vk == 0x20)
+
+                if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                    if is_ctrl:
+                        self.ctrl_held = True
+                    elif is_space:
+                        self.space_held = True
+
+                    if self.ctrl_held and self.space_held:
+                        if not self.recording_active:
+                            self.recording_active = True
+                            self.on_press()
+                elif wParam in (WM_KEYUP, WM_SYSKEYUP):
+                    if is_ctrl:
+                        self.ctrl_held = False
+                    elif is_space:
+                        self.space_held = False
+
+                    if not self.ctrl_held or not self.space_held:
+                        if self.recording_active:
+                            self.recording_active = False
+                            self.on_release()
+
+            return CallNextHookEx(self._hook, nCode, wParam, lParam)
+
+        # Define GetModuleHandleW properly to prevent 64-bit handle truncation
+        GetModuleHandle = kernel32.GetModuleHandleW
+        GetModuleHandle.argtypes = [wintypes.LPCWSTR]
+        GetModuleHandle.restype = wintypes.HINSTANCE
+
+        self._hook_callback = HOOKPROC(hook_proc)
+        h_mod = GetModuleHandle(None)
+        
+        self._hook = SetWindowsHookEx(
+            WH_KEYBOARD_LL,
+            self._hook_callback,
+            h_mod,
+            0
+        )
+        if not self._hook:
+            # Fallback to passing 0 as the module handle (valid for WH_KEYBOARD_LL global hooks)
+            self._hook = SetWindowsHookEx(
+                WH_KEYBOARD_LL,
+                self._hook_callback,
+                0,
+                0
+            )
+            
+        if not self._hook:
+            err = kernel32.GetLastError()
+            print(f"[KEYBOARD] Failed to install keyboard hook! GetLastError: {err}")
+            return
+
+        print("[KEYBOARD] Global keyboard hook installed. Hold Ctrl+Space to speak.")
+
+        # Windows Message Loop
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) != 0:
+            user32.TranslateMessage(ctypes.byref(msg))
+            user32.DispatchMessageW(ctypes.byref(msg))
+
+    def stop(self) -> None:
+        if sys.platform == "win32" and ctypes is not None:
+            if self._hook:
+                ctypes.windll.user32.UnhookWindowsHookEx(self._hook)
+                self._hook = None
+
+
+class VoiceInputManager:
+    """Manage push-to-talk command capture and state transitions."""
+
+    # UI States
+    STATE_IDLE = "idle"
+    STATE_RECORDING = "recording"
+    STATE_PROCESSING = "processing"
+    STATE_SPEAKING = "speaking"
 
     def __init__(
         self,
@@ -86,33 +219,31 @@ class VoiceInputManager:
         self.model_name = model_name
         self.samplerate = samplerate
         self.channels = channels
-        # Reserved for a later phase; not used in Phase 2 listening flow.
-        self.wake_words = wake_words or ["hey jarvis", "jarvis", "ok jarvis"]
+        self.wake_words = wake_words or ["hey Nova", "nova", "ok nova"]
 
         self._model = None
-        self._thread: Optional[threading.Thread] = None
-        self._stop_event = threading.Event()
         self._callbacks: List[Callable[[str], None]] = []
-        self._listening = False
         self._request_counter = 0
 
-        # Internal queue used by background thread for events.
+        self.state = self.STATE_IDLE
+        self._recording_blocks: List["np.ndarray"] = []
+        self._recording_stream: Optional["sd.InputStream"] = None
+
+        # Internal queue used for events.
         self._q: "queue.Queue[tuple[str, Optional[str]]]" = queue.Queue()
 
     @property
     def is_listening(self) -> bool:
-        return self._listening
+        return self.state == self.STATE_RECORDING
 
     def on_command(self, callback: Callable[[str], None]) -> None:
         self._callbacks.append(callback)
 
-    def get_events(self) -> List[tuple[str, Optional[str]]]:
-        """Drain and return queued voice events.
+    def set_state(self, new_state: str) -> None:
+        self.state = new_state
+        print(f"[UI_STATE] {new_state.upper()}")
 
-        Events are tuples of (event_type, payload) such as:
-        - ("command", transcribed_text)
-        - ("error", error_message)
-        """
+    def get_events(self) -> List[tuple[str, Optional[str]]]:
         events: List[tuple[str, Optional[str]]] = []
         while True:
             try:
@@ -125,180 +256,52 @@ class VoiceInputManager:
         if whisper is None:
             raise RuntimeError("Whisper is not installed. Install `openai-whisper`.")
         if self._model is None:
-            # model load can be IO and CPU heavy
             self._model = whisper.load_model(self.model_name)
 
-    def start_listening(self, background: bool = True) -> None:
+    def start_recording(self) -> None:
         _ensure_audio_deps()
-        if self._thread and self._thread.is_alive():
-            return
-
-        self._stop_event.clear()
-        self._listening = True
-        print("[VOICE] Listening thread started")
-
-        def run_loop():
-            try:
-                self._load_model()
-            except Exception as exc:
-                self._q.put(("error", str(exc)))
-                self._listening = False
-                return
-
-            while not self._stop_event.is_set():
-                try:
-                    self._request_counter += 1
-                    req_id = f"{self._request_counter:02d}"
-                    audio_path = self._record_until_silence(silence_duration=2.0, max_duration=30.0, req_id=req_id)
-                    try:
-                        cmd_text = self.transcribe_audio(audio_path, req_id=req_id)
-                    finally:
-                        with contextlib.suppress(Exception):
-                            Path(audio_path).unlink(missing_ok=True)
-
-                    if cmd_text:
-                        self._q.put(("command", cmd_text))
-                        for cb in list(self._callbacks):
-                            try:
-                                print("[VOICE] Calling callback...")
-                                cb(cmd_text)
-                                print("[VOICE] Callback finished.")
-                            except Exception:
-                                traceback.print_exc()
-                        # Settling delay to prevent echo/TTS feedback from contaminating next recording
-                        time.sleep(0.5)
-                except Exception:
-                    traceback.print_exc()
-                    time.sleep(0.5)
-
-            self._listening = False
-
-        self._thread = threading.Thread(target=run_loop, daemon=True)
-        if background:
-            self._thread.start()
-        else:
-            run_loop()
-
-    def stop_listening(self) -> None:
-        self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=2.0)
-        self._listening = False
-
-    # --- Audio capture helpers ---
-
-    def _record_short_chunk(self, duration: float = 2.0) -> str:
-        _ensure_audio_deps()
-        frames = []
+        self.set_state(self.STATE_RECORDING)
+        print("[VOICE] Recording...")
+        self._recording_blocks = []
 
         def callback(indata, frames_count, time_info, status):
-            if status:
-                pass
-            frames.append(indata.copy())
+            self._recording_blocks.append(indata.copy())
 
-        with sd.InputStream(samplerate=self.samplerate, channels=self.channels, callback=callback):
-            sd.sleep(int(duration * 1000))
+        self._recording_stream = sd.InputStream(
+            samplerate=self.samplerate,
+            channels=self.channels,
+            callback=callback
+        )
+        self._recording_stream.start()
 
-        arr = np.concatenate(frames, axis=0).flatten() if frames else np.zeros((int(self.samplerate * 0.1),), dtype="float32")
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-            path = temp_file.name
-        _write_wav(path, arr, samplerate=self.samplerate)
-        return path
+    def stop_recording(self) -> str:
+        if self._recording_stream is None:
+            print("[VOICE] Warning: Stop called but recording was not active.")
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+                path = temp_file.name
+            _write_wav(path, np.zeros((int(self.samplerate * 0.1),), dtype="float32"), samplerate=self.samplerate)
+            return path
 
-    def _record_until_silence(self, silence_duration: float = 2.0, max_duration: float = 30.0, req_id: str = "unknown") -> str:
-        print(f"[VOICE] [ReqID: {req_id}] Waiting for speech...")
-        _ensure_audio_deps()
-        recording_start_time = time.time()
-        block_ms = 200
-        blocks = []
-        started = False
-        silent_ms = 0
-        total_ms = 0
-        speech_start_time = None
-        last_speech_time = None
+        self._recording_stream.stop()
+        self._recording_stream.close()
+        self._recording_stream = None
 
-        def callback(indata, frames_count, time_info, status):
-            blocks.append(indata.copy())
-
-        with sd.InputStream(samplerate=self.samplerate, channels=self.channels, callback=callback):
-            while total_ms < int(max_duration * 1000) and silent_ms < int(silence_duration * 1000):
-                sd.sleep(block_ms)
-                total_ms += block_ms
-                if not blocks:
-                    continue
-                
-                # Fix: slice samples instead of blocks to correctly monitor only recent audio
-                all_samples = np.concatenate(blocks, axis=0).flatten()
-                samples_needed = int(self.samplerate * block_ms / 1000)
-                recent = all_samples[-samples_needed:]
-
-                # Use WebRTC VAD if available for robust speech detection
-                is_speech = False
-                if webrtcvad is not None:
-                    try:
-                        vad = webrtcvad.Vad(2)
-                        # prepare 30ms frame
-                        frame_ms = 30
-                        frame_len = int(self.samplerate * frame_ms / 1000)
-                        if len(recent) >= frame_len:
-                            frame = recent[-frame_len:]
-                            pcm16 = (frame * 32767).astype("int16").tobytes()
-                            is_speech = vad.is_speech(pcm16, sample_rate=self.samplerate)
-                    except Exception:
-                        is_speech = False
-                else:
-                    rms = float(np.sqrt((recent ** 2).mean()))
-                    is_speech = rms > 0.01
-
-                if is_speech:
-                    now = time.time()
-                    last_speech_time = now
-                    if not started:
-                        started = True
-                        speech_start_time = now
-                    silent_ms = 0
-                else:
-                    # Fix: increment silence counter even if speech hasn't started yet
-                    # so that we exit early (after silence_duration) if no speech is detected.
-                    silent_ms += block_ms
-
-        recording_end_time = time.time()
-        recording_duration = recording_end_time - recording_start_time
+        blocks = self._recording_blocks
+        self._recording_blocks = []
 
         if blocks:
             arr = np.concatenate(blocks, axis=0).flatten()
         else:
             arr = np.zeros((int(self.samplerate * 0.1),), dtype="float32")
 
-        speech_end_time = last_speech_time if last_speech_time is not None else None
-        silence_duration_acc = (recording_end_time - last_speech_time) if last_speech_time is not None else 0.0
-
-        # Save to debug_audio/ folder
         debug_dir = Path(__file__).parent.parent / "debug_audio"
         debug_dir.mkdir(exist_ok=True)
+        self._request_counter += 1
+        req_id = f"{self._request_counter:02d}"
         timestamp_str = time.strftime("%Y%m%d_%H%M%S")
         path = str(debug_dir / f"recording_{req_id}_{timestamp_str}.wav")
-        
+
         _write_wav(path, arr, samplerate=self.samplerate)
-        file_size = os.path.getsize(path)
-
-        rms_vol = float(np.sqrt((arr ** 2).mean()))
-        peak_vol = float(np.max(np.abs(arr))) if len(arr) > 0 else 0.0
-
-        print(f"[INSTRUMENTATION] Request ID: {req_id}")
-        print(f"[INSTRUMENTATION] Recording start time: {recording_start_time}")
-        print(f"[INSTRUMENTATION] Recording end time: {recording_end_time}")
-        print(f"[INSTRUMENTATION] Recording duration: {recording_duration:.3f} s")
-        print(f"[INSTRUMENTATION] Sample rate: {self.samplerate} Hz")
-        print(f"[INSTRUMENTATION] Channel count: {self.channels}")
-        print(f"[INSTRUMENTATION] Frame count: {len(arr)}")
-        print(f"[INSTRUMENTATION] Number of collected blocks: {len(blocks)}")
-        print(f"[INSTRUMENTATION] RMS volume: {rms_vol:.6f}")
-        print(f"[INSTRUMENTATION] Peak volume: {peak_vol:.6f}")
-        print(f"[INSTRUMENTATION] File size: {file_size} bytes")
-        print(f"[INSTRUMENTATION] Speech start timestamp: {speech_start_time}")
-        print(f"[INSTRUMENTATION] Speech end timestamp: {speech_end_time}")
-        print(f"[INSTRUMENTATION] Silence duration: {silence_duration_acc:.3f} s")
         print(f"[VOICE] Recorded audio saved to {path}")
         return path
 
@@ -310,7 +313,6 @@ class VoiceInputManager:
             if self._model is None:
                 self._load_model()
             
-            # Transcription options to log
             transcribe_options = {
                 "language": "en",
                 "temperature": 0.0,
@@ -322,7 +324,6 @@ class VoiceInputManager:
             try:
                 result = self._model.transcribe(audio_file, **transcribe_options)
             except TypeError:
-                # Fallback for mock models in tests that do not accept kwargs
                 result = self._model.transcribe(audio_file, language="en")
             t1 = time.time()
             transcribe_time = t1 - t0
@@ -345,7 +346,7 @@ class VoiceInputManager:
                 print(f"[INSTRUMENTATION] [ReqID: {req_id}] No speech prob: {no_speech_prob:.6f}")
                 print(f"[INSTRUMENTATION] [ReqID: {req_id}] Compression ratio: {compression_ratio:.6f}")
 
-                # Fix: reject low-confidence/silent Whisper transcriptions (to prevent hallucinations on silence)
+                # Reject low-confidence/silent Whisper transcriptions (to prevent hallucinations on silence)
                 if no_speech_prob > 0.6 or avg_logprob < -1.0:
                     print(f"[VOICE] [ReqID: {req_id}] Rejecting low-confidence transcript: {text!r} (no_speech_prob: {no_speech_prob:.3f}, avg_logprob: {avg_logprob:.3f})")
                     return None
@@ -356,9 +357,33 @@ class VoiceInputManager:
             traceback.print_exc()
             return None
 
+    def _record_short_chunk(self, duration: float = 2.0) -> str:
+        _ensure_audio_deps()
+        frames = []
+
+        def callback(indata, frames_count, time_info, status):
+            if status:
+                pass
+            frames.append(indata.copy())
+
+        with sd.InputStream(samplerate=self.samplerate, channels=self.channels, callback=callback):
+            sd.sleep(int(duration * 1000))
+
+        arr = np.concatenate(frames, axis=0).flatten() if frames else np.zeros((int(self.samplerate * 0.1),), dtype="float32")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            path = temp_file.name
+        _write_wav(path, arr, samplerate=self.samplerate)
+        return path
+
+    # Continuous listening stubs for backward compatibility
+    def start_listening(self, background: bool = True) -> None:
+        pass
+
+    def stop_listening(self) -> None:
+        pass
+
 
 def _clean_transcript(text: str) -> str:
-    # basic cleanup: remove filler words and repeated whitespace
     cleaned = text
     fillers = [r"\bum\b", r"\buh\b", r"\bmm\b", r"\berm\b", r"\bplease\b"]
     for f in fillers:
@@ -367,4 +392,4 @@ def _clean_transcript(text: str) -> str:
     return cleaned
 
 
-__all__ = ["VoiceInputManager", "_clean_transcript"]
+__all__ = ["VoiceInputManager", "_clean_transcript", "KeyboardHookListener"]

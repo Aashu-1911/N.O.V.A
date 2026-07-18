@@ -31,6 +31,7 @@ KNOWN_APPS = [
 
 
 def _extract_url(text: str) -> Optional[str]:
+    # 1. Match explicit URLs
     url_match = re.search(
         r"(https?://[^\s]+|www\.[^\s]+)",
         text,
@@ -48,9 +49,21 @@ def _extract_url(text: str) -> Optional[str]:
         if parsed.netloc:
             return candidate
 
+    # 2. Match domain patterns (e.g. github.com, openai.com)
+    domain_match = re.search(
+        r"\b([a-zA-Z0-9-]+\.[a-zA-Z]{2,}(?:/[^\s]*)?)\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if domain_match:
+        candidate = domain_match.group(1)
+        if not candidate.startswith(("http://", "https://")):
+            candidate = f"https://{candidate}"
+        return candidate
+
     # Try to extract website name from commands like "open google", "visit youtube"
     # Remove common command words first
-    cleaned_text = re.sub(r'\b(open|visit|go to|navigate to)\b', '', text, flags=re.IGNORECASE).strip()
+    cleaned_text = re.sub(r'\b(open|visit|go to|navigate to|website|site|browser)\b', '', text, flags=re.IGNORECASE).strip()
     
     # Match against known websites
     website_name = match_website(cleaned_text)
@@ -68,17 +81,19 @@ def _extract_search_query(text: str) -> Optional[str]:
         r"search\s+(?:google|web|online)?\s*(?:for\s+)?(.+)",
         r"(?:google|search)\s+(.+)",
         r"look up\s+(.+)",
-        r"find\s+(.+\s+on\s+(?:google|web))",
+        r"find\s+(.+)",
     ]
     
-    text_lower = text.lower()
     for pattern in patterns:
-        match = re.search(pattern, text_lower, flags=re.IGNORECASE)
+        match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
             query = match.group(1).strip()
             # Remove trailing punctuation
             query = re.sub(r'[.!?]+$', '', query)
-            return query if query else None
+            # Remove trailing search-related suffixes
+            query = re.sub(r'\s+on\s+(?:google|web|the\s+web)$', '', query, flags=re.IGNORECASE)
+            query = re.sub(r'\s+using\s+(?:google|web)$', '', query, flags=re.IGNORECASE)
+            return query.strip() if query else None
     
     return None
 
@@ -152,6 +167,15 @@ def _extract_application(text: str):
         if app in lower_text:
             return app
 
+    # Fallback to extracting the word immediately following action verbs
+    pattern = r"\b(?:open|close|exit|quit|terminate|kill|launch|start|run)\s+([a-zA-Z0-9\s]+?)(?:\s+(?:window|app|application|program))?\s*$"
+    match = re.search(pattern, lower_text)
+    if match:
+        candidate = match.group(1).strip()
+        stop_words = {"it", "that", "this", "browser", "website", "site", "page", "tab"}
+        if candidate not in stop_words:
+            return candidate
+
     return None
 
 
@@ -205,16 +229,16 @@ _WINDOW_INTENTS = {
 def _extract_volume_action(text: str):
     text = text.lower()
 
-    if "unmute" in text:
+    if "unmute" in text or "turn on volume" in text or "restore sound" in text:
         return "unmute"
 
-    if "mute" in text:
+    if "mute" in text or "turn off volume" in text or "silence computer" in text or "silence" in text or "mute volume" in text:
         return "mute"
 
-    if "volume up" in text or "increase volume" in text:
+    if "volume up" in text or "increase volume" in text or "increase sound" in text or "louder" in text or "make louder" in text:
         return "up"
 
-    if "volume down" in text or "decrease volume" in text:
+    if "volume down" in text or "decrease volume" in text or "lower volume" in text or "decrease sound" in text or "softer" in text or "quiet" in text:
         return "down"
 
     return None
@@ -295,7 +319,7 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         intent = "take_screenshot"
     elif re.search(r"\b(lock computer|lock pc|lock system|lock screen|lock my computer|lock my pc)\b", normalized):
         intent = "lock_pc"
-    elif re.search(r"\b(mute|unmute|volume up|volume down|increase volume|decrease volume)\b", normalized):
+    elif re.search(r"\b(mute|unmute|volume|sound|silence|louder|softer|quiet)\b", normalized):
         intent = "volume_control"
     elif re.search(r"\b(play|pause|resume|next|previous|skip)\b", normalized):
         intent = "media_control"

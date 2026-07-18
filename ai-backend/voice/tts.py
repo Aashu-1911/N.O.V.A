@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import pythoncom
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -115,6 +116,7 @@ class TTSManager:
         self._busy = threading.Event()
         self._lock = threading.Lock()
         self._ready = False
+        self._speak_counter = 0
 
     @property
     def is_speaking(self) -> bool:
@@ -159,11 +161,13 @@ class TTSManager:
         engine_ready = threading.Event()
 
         def _loop() -> None:
+            print(f"[INSTRUMENTATION] Worker started (thread id: {threading.get_ident()})", flush=True)
             # Initialize COM and pyttsx3 here, inside the dedicated worker thread
             try:
                 self._ensure_engine()
             except Exception as e:
-                print(f"[TTS] Engine init failed: {e}")
+                print(f"[INSTRUMENTATION] Worker engine init failed: {e}", flush=True)
+                traceback.print_exc()
             finally:
                 engine_ready.set()  # unblock _ensure_worker caller
 
@@ -173,19 +177,23 @@ class TTSManager:
                 except queue.Empty:
                     continue
 
+                print(f"[INSTRUMENTATION] Worker dequeued item: {request.text!r}", flush=True)
                 self._busy.set()
                 try:
+                    print(f"[INSTRUMENTATION] Speaking text: {request.text!r}", flush=True)
                     self._speak_impl(request.text)
                 except Exception as e:
-                    print(f"[TTS] Error in _speak_impl: {e}")
+                    print(f"[INSTRUMENTATION] Worker exception during _speak_impl: {e}", flush=True)
+                    traceback.print_exc()
                 finally:
                     self._busy.clear()
+                    print(f"[INSTRUMENTATION] Finally block executed for request: {request.text!r}", flush=True)
                     if request.done_event:
                         request.done_event.set()
 
             # Reset engine so a future _ensure_worker call re-initializes cleanly
             self._engine = None
-            print("[TTS] Worker loop exited.")
+            print("[INSTRUMENTATION] Worker loop exited.", flush=True)
 
         self._worker = threading.Thread(target=_loop, daemon=True)
         self._worker.start()
@@ -227,13 +235,35 @@ class TTSManager:
         
         Blocks until speech completes or the worker dies (max 30s safety timeout).
         """
+        self._speak_counter += 1
+        req_id = f"sp_{self._speak_counter:02d}"
+        
+        cur_thread = threading.current_thread()
+        worker_alive = self._worker.is_alive() if self._worker else False
+        worker_id = self._worker.ident if self._worker else None
+        q_size_before = self._queue.qsize()
+        
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] speak() called with text: {text!r}")
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current thread: name={cur_thread.name}, id={cur_thread.ident}")
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Worker thread alive?: {worker_alive}")
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Worker thread id: {worker_id}")
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Queue size before enqueue: {q_size_before}")
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Engine initialized?: {self._engine is not None}")
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current busy flag: {self._busy.is_set()}")
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current stop flag: {self._stop_event.is_set()}")
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current speaking flag (is_speaking): {self.is_speaking}")
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current engine object id: {id(self._engine) if self._engine is not None else None}")
+        
         self._ensure_worker()
         self._drain_queue()
         done_event = threading.Event()
         self._enqueue(text, priority=priority, done_event=done_event)
-        # Safety timeout: if the worker dies mid-speech the event would never
-        # be set without this, hanging the voice callback thread forever.
+        
+        q_size_after = self._queue.qsize()
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Queue size after enqueue: {q_size_after}")
+        
         done_event.wait(timeout=30.0)
+        print(f"[INSTRUMENTATION] [ReqID: {req_id}] done_event.wait returned.")
 
     def speak_async(self, text: str, priority: str = "normal") -> None:
         """Speak text without blocking the caller."""
@@ -293,9 +323,25 @@ class TTSManager:
 
         self._ensure_engine()
 
+        # Reset SAPI5 AudioOutputStream to force re-binding to default audio device
+        if hasattr(self._engine, "proxy") and hasattr(self._engine.proxy, "_driver"):
+            driver = self._engine.proxy._driver
+            if hasattr(driver, "_tts"):
+                try:
+                    driver._tts.AudioOutputStream = None
+                except Exception as e:
+                    print(f"[TTS] Warning: Failed to reset AudioOutputStream: {e}")
+
         for index, chunk in enumerate(chunks):
             self._engine.say(chunk)
-            self._engine.runAndWait()
+            print(f"[INSTRUMENTATION] runAndWait() entered for chunk: {chunk!r}", flush=True)
+            try:
+                self._engine.runAndWait()
+                print(f"[INSTRUMENTATION] runAndWait() exited for chunk: {chunk!r}", flush=True)
+            except Exception as e:
+                print(f"[INSTRUMENTATION] runAndWait() exception for chunk {chunk!r}: {e}", flush=True)
+                traceback.print_exc()
+                raise
             if index < len(chunks) - 1:
                 time.sleep(0.18)
 

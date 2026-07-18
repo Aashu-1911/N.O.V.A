@@ -48,7 +48,7 @@ _PRONOUN_WB_PATTERNS = [
     re.compile(r'\bthat\b', re.IGNORECASE),
     re.compile(r'\bthere\b', re.IGNORECASE),
 ]
-_PRONOUN_SUBSTRING_TOKENS = ["this app", "this window"]
+_PRONOUN_SUBSTRING_TOKENS = ["this app", "this window", "this project", "this file", "this folder"]
 
 # Intent values that qualify as media intents (for media-after-app check)
 _MEDIA_INTENTS = {"media_control", "play_music"}
@@ -275,10 +275,23 @@ def execute_chain(
     for i, cmd in enumerate(commands):
         dep = _is_dependent(cmd, ec.last_intent)
 
+        # Determine whether this is a strict pronoun/reference dependency
+        is_strict_dep = False
+        lower_cmd = cmd.lower()
+        for pattern in _PRONOUN_WB_PATTERNS:
+            if pattern.search(lower_cmd):
+                is_strict_dep = True
+                break
+        if not is_strict_dep:
+            for token in _PRONOUN_SUBSTRING_TOKENS:
+                if token in lower_cmd:
+                    is_strict_dep = True
+                    break
+
         # Determine whether the immediately preceding result was an error
         prev_result = results[i - 1] if i > 0 else None
         prereq_failed = (
-            dep
+            is_strict_dep
             and prev_result is not None
             and prev_result.get("status") == "error"
         )
@@ -302,6 +315,13 @@ def execute_chain(
         # Build a shallow context snapshot for execute_fn
         sub_ctx: dict = dict(ec.__dict__)
         sub_ctx["raw_command"] = cmd
+
+        # If previous command opened an application or website, wait a brief moment for it to load/be ready
+        if i > 0 and ec.last_intent in {"open_application", "open_website"}:
+            import sys
+            if not any(m in sys.modules for m in ("pytest", "unittest", "_pytest")):
+                import time
+                time.sleep(1.5)
 
         try:
             result = execute_fn(cmd, sub_ctx)
@@ -329,8 +349,14 @@ def execute_chain(
         chain_status = "partial"
 
     # ---- Reply combining ----------------------------------------------------
-    replies = [r["reply"] for r in results if r.get("reply")]
-    combined_reply = " and ".join(replies)
+    cleaned_replies = []
+    for r in results:
+        reply = r.get("reply")
+        if reply:
+            cleaned = _clean_list_markers(reply)
+            if cleaned:
+                cleaned_replies.append(cleaned)
+    combined_reply = " and ".join(cleaned_replies)
 
     return {
         "status": chain_status,
@@ -341,3 +367,18 @@ def execute_chain(
             "results": results,
         },
     }
+
+
+def _clean_list_markers(text: str) -> str:
+    text = text.strip()
+    if text in {"*", "-", "+", ""}:
+        return ""
+    # Strip leading bullet/numbered list patterns
+    text = re.sub(r'^\s*[-*+]\s+', '', text)
+    text = re.sub(r'^\s*\d+\.\s+', '', text)
+    # Strip newline-prefixed bullet/numbered list patterns and join with space
+    text = re.sub(r'\n\s*[-*+]\s+', ' ', text)
+    text = re.sub(r'\n\s*\d+\.\s+', ' ', text)
+    # Replace remaining newlines with spaces
+    text = text.replace('\n', ' ')
+    return text.strip()

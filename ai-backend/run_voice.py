@@ -24,6 +24,8 @@ Say any of these to test:
 
 import sys
 import os
+import threading
+import time
 
 # Ensure ai-backend root is on the path when running from any directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -31,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import VOICE_MODEL
 from database import init_db
 from managers.app_manager import load_start_menu_apps
-from voice.stt import VoiceInputManager
+from voice.stt import VoiceInputManager, KeyboardHookListener
 from adapters.voice_adapter import voice_command_callback
 from voice.tts import _default_tts_manager
 
@@ -54,18 +56,62 @@ def main():
     _default_tts_manager._ensure_worker()
     print("[INIT] TTS ready.")
 
-    # Register voice callback and start listening
-    # Whisper model loads in the background thread when start_listening() is called
+    # Load VoiceInputManager and pre-load Whisper
     print(f"[INIT] Starting voice listener with Whisper '{VOICE_MODEL}' model...")
-    print("[INFO]  Whisper will load in the background — this takes 1-3 min on first run.")
     vm = VoiceInputManager(model_name=VOICE_MODEL)
     vm.on_command(voice_command_callback)
+    
+    print("[INIT] Pre-loading Whisper model (this takes 1-3 min on first run)...")
+    vm._load_model()
+    print("[INIT] Whisper model loaded successfully.")
 
-    print("\n[READY] Mic is open. Speak a command after the model loads...")
-    print("[INFO]  You will see '[VOICE] Waiting for speech...' when ready.")
-    print("[INFO]  Press Ctrl+C to stop.\n")
+    # Callbacks for Keyboard Listener
+    def on_press():
+        if vm.state != vm.STATE_IDLE:
+            return
+        vm.start_recording()
 
-    vm.start_listening(background=False)  # blocks here, runs the loop
+    def on_release():
+        audio_path = vm.stop_recording()
+        
+        def process_and_execute():
+            vm.set_state(vm.STATE_PROCESSING)
+            req_id = f"ptt_{vm._request_counter:02d}"
+            cmd_text = vm.transcribe_audio(audio_path, req_id=req_id)
+            
+            # Clean up the file after transcription
+            try:
+                from pathlib import Path
+                Path(audio_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+            if cmd_text:
+                vm.set_state(vm.STATE_SPEAKING)
+                voice_command_callback(cmd_text)
+            
+            vm.set_state(vm.STATE_IDLE)
+
+        threading.Thread(target=process_and_execute, daemon=True).start()
+
+    # Start keyboard hook listener
+    listener = KeyboardHookListener(on_press=on_press, on_release=on_release)
+    listener.start()
+
+    print("\n[READY] Push-to-Talk is ready!")
+    print("[INFO]  HOLD Ctrl + Space to speak, and RELEASE to execute.")
+    print("[INFO]  Press Ctrl+C to exit.\n")
+    
+    # Set initial state
+    vm.set_state(vm.STATE_IDLE)
+
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        print("\n[STOP] Shutting down...")
+    finally:
+        listener.stop()
 
 
 if __name__ == "__main__":

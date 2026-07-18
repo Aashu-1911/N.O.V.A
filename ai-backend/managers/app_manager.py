@@ -135,28 +135,59 @@ def open_application(app_name: str) -> bool:
 def close_application(app_name: str) -> bool:
 	app_name = app_name.lower().strip()
 
+	# Broad mapping from aliases/names to process executables
 	PROCESS_MAP = {
-		"chrome": "chrome.exe",
-		"telegram": "telegram.exe",
-		"telegram desktop": "telegram.exe",
-		"spotify": "spotify.exe",
-		"discord": "discord.exe",
-		"notepad": "notepad.exe",
-		"vs code": "code.exe",
-		"vscode": "code.exe",
+		"chrome": ["chrome.exe"],
+		"google chrome": ["chrome.exe"],
+		"browser": ["chrome.exe", "msedge.exe", "firefox.exe"],
+		"telegram": ["telegram.exe"],
+		"telegram desktop": ["telegram.exe"],
+		"spotify": ["spotify.exe"],
+		"discord": ["discord.exe"],
+		"notepad": ["notepad.exe"],
+		"vs code": ["code.exe"],
+		"vscode": ["code.exe"],
+		"visual studio code": ["code.exe"],
+		"code": ["code.exe"],
+		"calculator": ["calculator.exe", "calc.exe"],
+		"calc": ["calculator.exe", "calc.exe"],
 	}
 
-	process_name = PROCESS_MAP.get(app_name)
+	target_exes = PROCESS_MAP.get(app_name, [])
+	if not target_exes:
+		target_exes = [f"{app_name}.exe", app_name]
 
-	if not process_name:
-		return False
+	target_exes_lower = [exe.lower() for exe in target_exes]
 
-	for proc in psutil.process_iter(["name"]):
+	import os
+	ignored_pids = {os.getpid()}
+	try:
+		ignored_pids.add(os.getppid())
+	except Exception:
+		pass
+
+	closed_any = False
+	for proc in psutil.process_iter(["pid", "name"]):
 		try:
-			if proc.info["name"] and proc.info["name"].lower() == process_name:
+			pid = proc.info["pid"]
+			if pid in ignored_pids:
+				continue
+
+			name = proc.info["name"]
+			if not name:
+				continue
+			name_lower = name.lower()
+			
+			matched = False
+			for target in target_exes_lower:
+				if name_lower == target or name_lower.replace(".exe", "") == target:
+					matched = True
+					break
+
+			if matched:
 				proc.terminate()
-				return True
+				closed_any = True
 		except Exception:
 			pass
 
-	return False
+	return closed_any
