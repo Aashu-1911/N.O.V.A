@@ -145,16 +145,39 @@ def voice_command_callback(command_text: str) -> None:
     logger.info(f"[VoiceAdapter] Received command: {command_text!r}")
 
     try:
+        from core.intent_parser import parse_intent
+        from core.command_executor import HANDLERS
+
+        print("[INSTRUMENTATION] execute_command entered")
+        
+        # Log parsed intent, entities, and selected handler
+        try:
+            parsed = parse_intent(command_text)
+            intent = parsed.get("intent")
+            entities = parsed.get("entities")
+            handler = HANDLERS.get(intent, HANDLERS.get("answer_question"))
+            print(f"[INSTRUMENTATION] intent: {intent}")
+            print(f"[INSTRUMENTATION] entities: {entities}")
+            print(f"[INSTRUMENTATION] handler selected: {handler.__name__ if handler else 'None'}")
+        except Exception as e:
+            print(f"[INSTRUMENTATION] Failed to parse intent/handler for logging: {e}")
+
         # Delegate to the interface-agnostic Command_Executor
         response = execute_command(command_text)
+        print("[INSTRUMENTATION] execute_command exited")
+        print("[INSTRUMENTATION] handler exited")
+        print(f"[INSTRUMENTATION] ResponseDict: {response}")
 
         # Extract the user-facing reply
         reply = response.get("reply", "").strip()
         status = response.get("status", "success")
+        print(f"[INSTRUMENTATION] reply: {reply!r}")
 
         if not reply:
             logger.warning("[VoiceAdapter] execute_command returned empty reply")
+            print("[INSTRUMENTATION] TTS called (empty reply fallback)")
             speak("I processed your request but have nothing to say.")
+            print("[INSTRUMENTATION] TTS finished")
             return
 
         # Apply voice-specific formatting (strip markdown, etc.)
@@ -163,13 +186,17 @@ def voice_command_callback(command_text: str) -> None:
         if status == "error":
             logger.warning(f"[VoiceAdapter] Command returned error: {reply!r}")
 
+        print("[INSTRUMENTATION] TTS called")
         speak(spoken_reply)
+        print("[INSTRUMENTATION] TTS finished")
 
     except Exception as exc:
         error_msg = "Sorry, something went wrong while processing your command."
         logger.exception(f"[VoiceAdapter] Unexpected error: {exc}")
         try:
+            print("[INSTRUMENTATION] TTS called (error fallback)")
             speak(error_msg)
+            print("[INSTRUMENTATION] TTS finished (error fallback)")
         except Exception:
             # TTS itself failed — nothing more we can do here
             logger.exception("[VoiceAdapter] speak() also failed during error handling")

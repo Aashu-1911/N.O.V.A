@@ -41,14 +41,17 @@ class OllamaClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model if model in SUPPORTED_MODELS else OLLAMA_MODEL
-        self.timeout = timeout
+        # Use a Timeout object: 10s to connect, 300s to read (for slow CPU inference)
+        self.timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
 
     def _build_messages(
         self,
         user_message: str,
         conversation_history: Optional[Iterable[Dict[str, str]]] = None,
     ) -> List[Dict[str, str]]:
-        history = list(conversation_history or [])[-10:]
+        # Keep only the last 6 exchanges (12 messages) to stay within context limits.
+        # Large history causes Ollama HTTP 500 when the model context window overflows.
+        history = list(conversation_history or [])[-6:]
         return ([{"role": "system", "content": SYSTEM_PROMPT}] + history + [{"role": "user", "content": user_message}])
 
     def _stream_request(self, payload: Dict[str, object]) -> List[str]:
@@ -87,6 +90,11 @@ class OllamaClient:
             raise OllamaConnectionError(
                 "Could not connect to Ollama at http://localhost:11434. "
                 "Make sure Ollama is installed, running, and the model is pulled."
+            ) from exc
+        except httpx.ReadTimeout as exc:
+            raise RuntimeError(
+                "Ollama took too long to respond. The model may be loading or your "
+                "hardware is too slow. Try a smaller model like 'qwen3:1.7b'."
             ) from exc
         except httpx.HTTPStatusError as exc:
             response_text = ""
@@ -143,6 +151,11 @@ class OllamaClient:
                 "Could not connect to Ollama at http://localhost:11434. "
                 "Make sure Ollama is installed, running, and the model is pulled."
             ) from exc
+        except httpx.ReadTimeout as exc:
+            raise RuntimeError(
+                "Ollama took too long to respond. The model may be loading or your "
+                "hardware is too slow. Try a smaller model like 'qwen3:1.7b'."
+            ) from exc
         except httpx.HTTPStatusError as exc:
             response_text = ""
             try:
@@ -172,6 +185,7 @@ class OllamaClient:
             "model": self.model,
             "messages": self._build_messages(user_message, conversation_history),
             "stream": True,
+            "options": {"num_ctx": 2048},  # cap context to prevent OOM/500 on CPU
         }
 
         return self._stream_request(payload)

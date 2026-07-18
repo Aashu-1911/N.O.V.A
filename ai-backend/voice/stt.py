@@ -94,6 +94,7 @@ class VoiceInputManager:
         self._stop_event = threading.Event()
         self._callbacks: List[Callable[[str], None]] = []
         self._listening = False
+        self._request_counter = 0
 
         # Internal queue used by background thread for events.
         self._q: "queue.Queue[tuple[str, Optional[str]]]" = queue.Queue()
@@ -146,9 +147,11 @@ class VoiceInputManager:
 
             while not self._stop_event.is_set():
                 try:
-                    audio_path = self._record_until_silence(silence_duration=2.0, max_duration=30)
+                    self._request_counter += 1
+                    req_id = f"{self._request_counter:02d}"
+                    audio_path = self._record_until_silence(silence_duration=2.0, max_duration=30.0, req_id=req_id)
                     try:
-                        cmd_text = self.transcribe_audio(audio_path)
+                        cmd_text = self.transcribe_audio(audio_path, req_id=req_id)
                     finally:
                         with contextlib.suppress(Exception):
                             Path(audio_path).unlink(missing_ok=True)
@@ -162,6 +165,8 @@ class VoiceInputManager:
                                 print("[VOICE] Callback finished.")
                             except Exception:
                                 traceback.print_exc()
+                        # Settling delay to prevent echo/TTS feedback from contaminating next recording
+                        time.sleep(0.5)
                 except Exception:
                     traceback.print_exc()
                     time.sleep(0.5)
@@ -200,14 +205,17 @@ class VoiceInputManager:
         _write_wav(path, arr, samplerate=self.samplerate)
         return path
 
-    def _record_until_silence(self, silence_duration: float = 2.0, max_duration: float = 30.0) -> str:
-        print("[VOICE] Waiting for speech...")
+    def _record_until_silence(self, silence_duration: float = 2.0, max_duration: float = 30.0, req_id: str = "unknown") -> str:
+        print(f"[VOICE] [ReqID: {req_id}] Waiting for speech...")
         _ensure_audio_deps()
+        recording_start_time = time.time()
         block_ms = 200
         blocks = []
         started = False
         silent_ms = 0
         total_ms = 0
+        speech_start_time = None
+        last_speech_time = None
 
         def callback(indata, frames_count, time_info, status):
             blocks.append(indata.copy())
@@ -218,7 +226,12 @@ class VoiceInputManager:
                 total_ms += block_ms
                 if not blocks:
                     continue
-                recent = np.concatenate(blocks[-int(self.samplerate / (1000 / block_ms)):], axis=0)
+                
+                # Fix: slice samples instead of blocks to correctly monitor only recent audio
+                all_samples = np.concatenate(blocks, axis=0).flatten()
+                samples_needed = int(self.samplerate * block_ms / 1000)
+                recent = all_samples[-samples_needed:]
+
                 # Use WebRTC VAD if available for robust speech detection
                 is_speech = False
                 if webrtcvad is not None:
@@ -238,33 +251,107 @@ class VoiceInputManager:
                     is_speech = rms > 0.01
 
                 if is_speech:
-                    started = True
+                    now = time.time()
+                    last_speech_time = now
+                    if not started:
+                        started = True
+                        speech_start_time = now
                     silent_ms = 0
                 else:
-                    if started:
-                        silent_ms += block_ms
+                    # Fix: increment silence counter even if speech hasn't started yet
+                    # so that we exit early (after silence_duration) if no speech is detected.
+                    silent_ms += block_ms
+
+        recording_end_time = time.time()
+        recording_duration = recording_end_time - recording_start_time
 
         if blocks:
             arr = np.concatenate(blocks, axis=0).flatten()
         else:
             arr = np.zeros((int(self.samplerate * 0.1),), dtype="float32")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-            path = temp_file.name
+        speech_end_time = last_speech_time if last_speech_time is not None else None
+        silence_duration_acc = (recording_end_time - last_speech_time) if last_speech_time is not None else 0.0
+
+        # Save to debug_audio/ folder
+        debug_dir = Path(__file__).parent.parent / "debug_audio"
+        debug_dir.mkdir(exist_ok=True)
+        timestamp_str = time.strftime("%Y%m%d_%H%M%S")
+        path = str(debug_dir / f"recording_{req_id}_{timestamp_str}.wav")
+        
         _write_wav(path, arr, samplerate=self.samplerate)
+        file_size = os.path.getsize(path)
+
+        rms_vol = float(np.sqrt((arr ** 2).mean()))
+        peak_vol = float(np.max(np.abs(arr))) if len(arr) > 0 else 0.0
+
+        print(f"[INSTRUMENTATION] Request ID: {req_id}")
+        print(f"[INSTRUMENTATION] Recording start time: {recording_start_time}")
+        print(f"[INSTRUMENTATION] Recording end time: {recording_end_time}")
+        print(f"[INSTRUMENTATION] Recording duration: {recording_duration:.3f} s")
+        print(f"[INSTRUMENTATION] Sample rate: {self.samplerate} Hz")
+        print(f"[INSTRUMENTATION] Channel count: {self.channels}")
+        print(f"[INSTRUMENTATION] Frame count: {len(arr)}")
+        print(f"[INSTRUMENTATION] Number of collected blocks: {len(blocks)}")
+        print(f"[INSTRUMENTATION] RMS volume: {rms_vol:.6f}")
+        print(f"[INSTRUMENTATION] Peak volume: {peak_vol:.6f}")
+        print(f"[INSTRUMENTATION] File size: {file_size} bytes")
+        print(f"[INSTRUMENTATION] Speech start timestamp: {speech_start_time}")
+        print(f"[INSTRUMENTATION] Speech end timestamp: {speech_end_time}")
+        print(f"[INSTRUMENTATION] Silence duration: {silence_duration_acc:.3f} s")
         print(f"[VOICE] Recorded audio saved to {path}")
         return path
 
-    def transcribe_audio(self, audio_file: str) -> Optional[str]:
+    def transcribe_audio(self, audio_file: str, req_id: str = "unknown") -> Optional[str]:
         """Transcribe a WAV file and return cleaned text or None."""
-        print(f"[VOICE] Transcribing: {audio_file}")
+        print(f"[VOICE] [ReqID: {req_id}] Transcribing: {audio_file}")
+        t0 = time.time()
         try:
             if self._model is None:
                 self._load_model()
-            result = self._model.transcribe(audio_file, language="en")
+            
+            # Transcription options to log
+            transcribe_options = {
+                "language": "en",
+                "temperature": 0.0,
+                "beam_size": 5,
+                "fp16": True,
+                "condition_on_previous_text": True,
+            }
+            
+            try:
+                result = self._model.transcribe(audio_file, **transcribe_options)
+            except TypeError:
+                # Fallback for mock models in tests that do not accept kwargs
+                result = self._model.transcribe(audio_file, language="en")
+            t1 = time.time()
+            transcribe_time = t1 - t0
+            
             text = result.get("text", "").strip()
-            print(f"[VOICE] Transcript: {text}")
-            return _clean_transcript(text) or None
+            clean_text = _clean_transcript(text)
+            
+            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Whisper model: {self.model_name}")
+            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Transcription options: {transcribe_options}")
+            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Transcription time: {transcribe_time:.3f} s")
+            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Raw transcript: {text!r}")
+            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Clean transcript: {clean_text!r}")
+            
+            segments = result.get("segments", [])
+            if segments:
+                avg_logprob = float(np.mean([s.get("avg_logprob", 0) for s in segments]))
+                no_speech_prob = float(np.mean([s.get("no_speech_prob", 0) for s in segments]))
+                compression_ratio = float(np.mean([s.get("compression_ratio", 0) for s in segments]))
+                print(f"[INSTRUMENTATION] [ReqID: {req_id}] Avg logprob: {avg_logprob:.6f}")
+                print(f"[INSTRUMENTATION] [ReqID: {req_id}] No speech prob: {no_speech_prob:.6f}")
+                print(f"[INSTRUMENTATION] [ReqID: {req_id}] Compression ratio: {compression_ratio:.6f}")
+
+                # Fix: reject low-confidence/silent Whisper transcriptions (to prevent hallucinations on silence)
+                if no_speech_prob > 0.6 or avg_logprob < -1.0:
+                    print(f"[VOICE] [ReqID: {req_id}] Rejecting low-confidence transcript: {text!r} (no_speech_prob: {no_speech_prob:.3f}, avg_logprob: {avg_logprob:.3f})")
+                    return None
+
+            print(f"[VOICE] [ReqID: {req_id}] Transcript: {text}")
+            return clean_text or None
         except Exception as exc:
             traceback.print_exc()
             return None

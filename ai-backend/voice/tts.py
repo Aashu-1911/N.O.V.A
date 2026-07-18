@@ -176,10 +176,16 @@ class TTSManager:
                 self._busy.set()
                 try:
                     self._speak_impl(request.text)
+                except Exception as e:
+                    print(f"[TTS] Error in _speak_impl: {e}")
                 finally:
                     self._busy.clear()
                     if request.done_event:
                         request.done_event.set()
+
+            # Reset engine so a future _ensure_worker call re-initializes cleanly
+            self._engine = None
+            print("[TTS] Worker loop exited.")
 
         self._worker = threading.Thread(target=_loop, daemon=True)
         self._worker.start()
@@ -217,12 +223,17 @@ class TTSManager:
         return split_text_for_tts(text)
 
     def speak(self, text: str, priority: str = "normal") -> None:
-        """Speak text synchronously."""
+        """Speak text synchronously.
+        
+        Blocks until speech completes or the worker dies (max 30s safety timeout).
+        """
         self._ensure_worker()
         self._drain_queue()
         done_event = threading.Event()
         self._enqueue(text, priority=priority, done_event=done_event)
-        done_event.wait()
+        # Safety timeout: if the worker dies mid-speech the event would never
+        # be set without this, hanging the voice callback thread forever.
+        done_event.wait(timeout=30.0)
 
     def speak_async(self, text: str, priority: str = "normal") -> None:
         """Speak text without blocking the caller."""

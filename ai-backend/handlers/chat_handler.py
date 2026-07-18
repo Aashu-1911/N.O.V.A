@@ -75,6 +75,8 @@ def handle_general_chat(
             "Please make sure Ollama is running."
         )
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return error(
             "I encountered an error processing your request. Please try again.",
             payload={"error": str(e)},
