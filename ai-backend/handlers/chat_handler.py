@@ -71,13 +71,14 @@ def handle_general_chat(
 
     except OllamaConnectionError:
         return error(
-            "I'm unable to connect to the AI service right now. "
-            "Please make sure Ollama is running."
+            "I'm having trouble reaching my language model right now. "
+            "You can still ask me to open applications, browse the web, or control your computer."
         )
     except Exception as e:
         import traceback
         traceback.print_exc()
         return error(
-            "I encountered an error processing your request. Please try again.",
+            "I'm having trouble reaching my language model right now. "
+            "You can still ask me to open applications, browse the web, or control your computer.",
             payload={"error": str(e)},
         )

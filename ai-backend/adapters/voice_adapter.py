@@ -35,8 +35,10 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 from voice import speak
+from voice.metrics import request_context
 from core.command_executor import execute_command
 
 logger = logging.getLogger(__name__)
@@ -144,6 +146,8 @@ def voice_command_callback(command_text: str) -> None:
 
     logger.info(f"[VoiceAdapter] Received command: {command_text!r}")
 
+    metrics = getattr(request_context, "metrics", None)
+
     try:
         from core.intent_parser import parse_intent
         from core.command_executor import HANDLERS
@@ -151,6 +155,9 @@ def voice_command_callback(command_text: str) -> None:
         print("[INSTRUMENTATION] execute_command entered")
         
         # Log parsed intent, entities, and selected handler
+        intent = "unknown"
+        entities = {}
+        handler = None
         try:
             parsed = parse_intent(command_text)
             intent = parsed.get("intent")
@@ -162,8 +169,16 @@ def voice_command_callback(command_text: str) -> None:
         except Exception as e:
             print(f"[INSTRUMENTATION] Failed to parse intent/handler for logging: {e}")
 
-        # Delegate to the interface-agnostic Command_Executor
+        # Delegate to the interface-agnostic Command_Executor with metrics tracking
+        if metrics:
+            metrics.execution_start = time.time()
+            
         response = execute_command(command_text)
+        
+        if metrics:
+            metrics.execution_end = time.time()
+            metrics.execution_time = metrics.execution_end - metrics.execution_start
+
         print("[INSTRUMENTATION] execute_command exited")
         print("[INSTRUMENTATION] handler exited")
         print(f"[INSTRUMENTATION] ResponseDict: {response}")
@@ -172,6 +187,12 @@ def voice_command_callback(command_text: str) -> None:
         reply = response.get("reply", "").strip()
         status = response.get("status", "success")
         print(f"[INSTRUMENTATION] reply: {reply!r}")
+
+        if metrics:
+            metrics.intent = intent
+            metrics.entities = entities
+            metrics.handler = handler.__name__ if handler else "None"
+            metrics.reply_length = len(reply)
 
         if not reply:
             logger.warning("[VoiceAdapter] execute_command returned empty reply")
@@ -193,10 +214,14 @@ def voice_command_callback(command_text: str) -> None:
     except Exception as exc:
         error_msg = "Sorry, something went wrong while processing your command."
         logger.exception(f"[VoiceAdapter] Unexpected error: {exc}")
+        
+        if metrics:
+            # Update reply length for fallback error
+            metrics.reply_length = len(error_msg)
+            
         try:
             print("[INSTRUMENTATION] TTS called (error fallback)")
             speak(error_msg)
             print("[INSTRUMENTATION] TTS finished (error fallback)")
         except Exception:
-            # TTS itself failed — nothing more we can do here
             logger.exception("[VoiceAdapter] speak() also failed during error handling")

@@ -20,6 +20,10 @@ from typing import Callable, List, Optional
 import re
 import sys
 
+from config import VOICE_CONFIG
+from core.intent_parser import parse_intent
+from voice.metrics import request_context, RequestMetrics, VOICE_METRICS
+
 try:
     import sounddevice as sd
     import numpy as np
@@ -331,27 +335,101 @@ class VoiceInputManager:
             text = result.get("text", "").strip()
             clean_text = _clean_transcript(text)
             
-            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Whisper model: {self.model_name}")
-            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Transcription options: {transcribe_options}")
-            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Transcription time: {transcribe_time:.3f} s")
-            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Raw transcript: {text!r}")
-            print(f"[INSTRUMENTATION] [ReqID: {req_id}] Clean transcript: {clean_text!r}")
+            # Initialize metrics object and save in thread-local context
+            metrics = RequestMetrics(
+                req_id=req_id,
+                transcript=text,
+                clean_transcript=clean_text,
+                pipeline_start=t0,
+                transcription_start=t0,
+                transcription_end=t1
+            )
+            request_context.metrics = metrics
             
+            avg_logprob = 0.0
+            no_speech_prob = 0.0
             segments = result.get("segments", [])
             if segments:
                 avg_logprob = float(np.mean([s.get("avg_logprob", 0) for s in segments]))
                 no_speech_prob = float(np.mean([s.get("no_speech_prob", 0) for s in segments]))
-                compression_ratio = float(np.mean([s.get("compression_ratio", 0) for s in segments]))
-                print(f"[INSTRUMENTATION] [ReqID: {req_id}] Avg logprob: {avg_logprob:.6f}")
-                print(f"[INSTRUMENTATION] [ReqID: {req_id}] No speech prob: {no_speech_prob:.6f}")
-                print(f"[INSTRUMENTATION] [ReqID: {req_id}] Compression ratio: {compression_ratio:.6f}")
-
-                # Reject low-confidence/silent Whisper transcriptions (to prevent hallucinations on silence)
-                if no_speech_prob > 0.6 or avg_logprob < -1.0:
-                    print(f"[VOICE] [ReqID: {req_id}] Rejecting low-confidence transcript: {text!r} (no_speech_prob: {no_speech_prob:.3f}, avg_logprob: {avg_logprob:.3f})")
-                    return None
-
-            print(f"[VOICE] [ReqID: {req_id}] Transcript: {text}")
+                
+            metrics.avg_logprob = avg_logprob
+            metrics.no_speech_prob = no_speech_prob
+            metrics.words_detected = len(clean_text.split())
+            
+            # Parse intent beforehand for override checks
+            parsed_intent = parse_intent(clean_text)
+            intent = parsed_intent.get("intent", "answer_question")
+            intent_confidence = parsed_intent.get("confidence", 0.5)
+            entities = parsed_intent.get("entities", {})
+            
+            metrics.intent = intent
+            metrics.intent_confidence = intent_confidence
+            metrics.entities = entities
+            
+            # Calculate validation score
+            no_speech_score = max(0.0, min(1.0, 1.0 - no_speech_prob))
+            logprob_score = max(0.0, min(1.0, (avg_logprob + 2.0) / 2.0))
+            length_score = min(1.0, metrics.words_detected / 5.0)
+            intent_recognizability = 1.0 if intent != "answer_question" else 0.5
+            
+            validation_score = (no_speech_score * 0.4) + (logprob_score * 0.3) + (intent_recognizability * 0.2) + (length_score * 0.1)
+            metrics.validation_score = validation_score
+            
+            is_known_intent = (intent != "answer_question")
+            is_grammar = matches_command_grammar(clean_text)
+            has_app = (entities.get("app_name") is not None)
+            
+            first_word = clean_text.split()[0].lower() if clean_text.split() else ""
+            has_action_verb = (first_word in ACTION_VERBS)
+            
+            override_acceptance = (is_known_intent or is_grammar or has_app or has_action_verb)
+            is_hallucination = is_whisper_hallucination(clean_text)
+            
+            min_logprob = VOICE_CONFIG.get("min_logprob", -1.5)
+            max_no_speech = VOICE_CONFIG.get("max_no_speech", 0.85)
+            intent_override = VOICE_CONFIG.get("intent_override", True)
+            
+            accepted = True
+            validation_reason = ""
+            acceptance_reason = ""
+            
+            if not clean_text:
+                accepted = False
+                validation_reason = "Empty transcript"
+            elif is_hallucination:
+                accepted = False
+                validation_reason = "Whisper hallucinated phrase or random symbols"
+            elif avg_logprob < min_logprob:
+                if intent_override and override_acceptance:
+                    acceptance_reason = "Accepted despite low logprob because: Known command/intent overrides confidence"
+                else:
+                    accepted = False
+                    validation_reason = f"Average logprob ({avg_logprob:.3f}) below threshold ({min_logprob})"
+            elif no_speech_prob > max_no_speech:
+                if intent_override and override_acceptance:
+                    acceptance_reason = "Accepted despite high silence probability because: Known command/intent overrides confidence"
+                else:
+                    accepted = False
+                    validation_reason = f"No speech probability ({no_speech_prob:.3f}) exceeds threshold ({max_no_speech})"
+            elif validation_score < 0.35:
+                if intent_override and override_acceptance:
+                    acceptance_reason = "Accepted despite low score because: Known command/intent overrides confidence"
+                else:
+                    accepted = False
+                    validation_reason = f"Overall confidence score ({validation_score:.3f}) too low"
+            else:
+                acceptance_reason = "Confidence score above threshold"
+                
+            metrics.validation_reason = validation_reason
+            metrics.acceptance_reason = acceptance_reason
+            
+            if not accepted:
+                print(f"[VOICE] [ReqID: {req_id}] Rejecting transcript: {text!r} | Reason: {validation_reason}")
+                _log_rejected_request(metrics)
+                return None
+            
+            print(f"[VOICE] [ReqID: {req_id}] Accepted transcript: {clean_text!r} | Score: {validation_score:.3f} | {acceptance_reason}")
             return clean_text or None
         except Exception as exc:
             traceback.print_exc()
@@ -381,6 +459,92 @@ class VoiceInputManager:
 
     def stop_listening(self) -> None:
         pass
+
+
+ACTION_VERBS = {
+    "open", "close", "exit", "quit", "terminate", "kill", "mute", "unmute",
+    "volume", "sound", "silence", "louder", "softer", "quiet", "play", "pause",
+    "resume", "next", "previous", "skip", "screenshot", "screen shot", "capture screen",
+    "lock", "focus", "minimize", "minimise", "maximize", "maximise", "restore",
+    "search", "google", "find", "add", "create", "delete", "remove", "update",
+    "edit", "list", "show", "what", "how", "tell", "click", "scroll"
+}
+
+def matches_command_grammar(text: str) -> bool:
+    normalized = text.strip().lower()
+    patterns = [
+        r"^what\s+(?:time|date|day|year)\s+(?:is\s+it|it\s+is|is\s+today)\b",
+        r"^what's\s+(?:the\s+)?(?:time|date|day)\b",
+        r"^what\s+is\s+the\s+(?:time|date|day)\b",
+        r"^(?:tell\s+me\s+)?(?:the\s+)?(?:time|date|day)\b",
+        r"^click\s+(?:ok|cancel|yes|no)\b",
+        r"^scroll\s+(?:down|up)\b"
+    ]
+    for p in patterns:
+        if re.search(p, normalized):
+            return True
+    return False
+
+HALLUCINATION_PATTERNS = [
+    r"Thank you for watching",
+    r"thanks for watching",
+    r"Subtitles by",
+    r"please subscribe",
+    r"watching!",
+    r"^[._\-+*#@!$%^&*()\[\]{}|\\:;\"'<>,.?/~` ]+$"
+]
+
+def is_whisper_hallucination(text: str) -> bool:
+    normalized = text.strip().lower()
+    for p in HALLUCINATION_PATTERNS:
+        if re.search(p, normalized, re.IGNORECASE):
+            return True
+    return False
+
+def _log_rejected_request(metrics: RequestMetrics):
+    VOICE_METRICS.add_command(
+        accepted=False,
+        transcription_time=metrics.transcription_end - metrics.transcription_start,
+        synthesis_time=0.0,
+        execution_time=0.0,
+        total_latency=metrics.transcription_end - metrics.pipeline_start
+    )
+    
+    print(f"[INSTRUMENTATION] ==================================================")
+    print(f"[INSTRUMENTATION]               VOICE PIPELINE LOG (REJECTED)")
+    print(f"[INSTRUMENTATION] ==================================================")
+    print(f"[INSTRUMENTATION] Request ID:          {metrics.req_id}")
+    print(f"[INSTRUMENTATION] Transcript:          {metrics.transcript!r}")
+    print(f"[INSTRUMENTATION] Validation Score:    {metrics.validation_score:.3f}")
+    print(f"[INSTRUMENTATION] Intent:              {metrics.intent}")
+    print(f"[INSTRUMENTATION] Entities:            {metrics.entities}")
+    print(f"[INSTRUMENTATION] Handler:             {metrics.handler}")
+    print(f"[INSTRUMENTATION] Execution Time:      0.000 s")
+    print(f"[INSTRUMENTATION] Reply Length:        0 chars")
+    print(f"[INSTRUMENTATION] TTS Queue Length:    0")
+    print(f"[INSTRUMENTATION] Synthesis Time:      0.000 s")
+    print(f"[INSTRUMENTATION] Playback Time:       0.000 s")
+    print(f"[INSTRUMENTATION] Total Latency:       {metrics.transcription_end - metrics.pipeline_start:.3f} s")
+    print(f"[INSTRUMENTATION] --------------------------------------------------")
+    print(f"[INSTRUMENTATION] Whisper logprob:     {metrics.avg_logprob:.6f}")
+    print(f"[INSTRUMENTATION] Speech prob:         {metrics.no_speech_prob:.6f} (silence prob)")
+    print(f"[INSTRUMENTATION] Words detected:      {metrics.words_detected}")
+    print(f"[INSTRUMENTATION] Validation reason:   {metrics.validation_reason}")
+    print(f"[INSTRUMENTATION] Acceptance reason:   {metrics.acceptance_reason}")
+    print(f"[INSTRUMENTATION] ==================================================", flush=True)
+
+    if VOICE_CONFIG.get("diagnostics", False):
+        print("\n==========================")
+        print("VOICE DIAGNOSTICS")
+        print(f"Transcript:          {metrics.clean_transcript}")
+        print(f"Validation score:    {metrics.validation_score:.3f}")
+        print(f"Intent confidence:   {metrics.intent_confidence:.3f}")
+        print(f"Execution latency:   0.000 s")
+        print(f"Whisper latency:     {metrics.transcription_end - metrics.transcription_start:.3f} s")
+        print(f"Piper latency:       0.000 s")
+        print(f"Handler latency:     0.000 s")
+        print(f"Total latency:       {metrics.transcription_end - metrics.pipeline_start:.3f} s")
+        print("==========================\n", flush=True)
 
 
 def _clean_transcript(text: str) -> str:

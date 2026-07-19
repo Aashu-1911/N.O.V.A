@@ -1,42 +1,15 @@
 """Voice output (TTS) module for Jarvis — Phase 3.
 
-Primary path:
-- pyttsx3 for offline, low-latency speech output
-
-Optional higher-quality path:
-- Coqui TTS for synthesized WAV files that can be played back with playsound
-
-The module keeps the implementation local to `voice/` so it can be integrated
-incrementally without disturbing the existing chat/STT backend.
+Completely refactored to use Piper TTS and sounddevice/soundfile.
 """
 from __future__ import annotations
 
-import queue
 import re
-import tempfile
-import threading
-import time
-import pythoncom
-import traceback
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+import logging
+from typing import List, Optional
+from tts.service import TTSService
 
-try:
-    import pyttsx3
-except Exception:  # pragma: no cover - import-time guard
-    pyttsx3 = None  # type: ignore
-
-try:
-    from playsound import playsound
-except Exception:  # pragma: no cover - import-time guard
-    playsound = None  # type: ignore
-
-try:
-    from TTS.api import TTS as CoquiTTS
-except Exception:  # pragma: no cover - import-time guard
-    CoquiTTS = None  # type: ignore
-
+logger = logging.getLogger(__name__)
 
 COMMON_JARVIS_PHRASES = [
     "Yes, I'm here",
@@ -69,7 +42,6 @@ def split_text_for_tts(text: str) -> List[str]:
         sentence = sentence.strip()
         if not sentence:
             continue
-        # Keep TTS chunks short enough for natural pauses.
         if len(sentence) <= 140:
             chunks.append(sentence)
             continue
@@ -83,298 +55,65 @@ def split_text_for_tts(text: str) -> List[str]:
     return chunks
 
 
-@dataclass(order=True)
-class _SpeechRequest:
-    priority_value: int
-    sequence: int
-    text: str
-    done_event: Optional[threading.Event] = None
-
-
 class TTSManager:
-    """Manage Jarvis speech output using pyttsx3 with an optional Coqui path."""
+    """Bridge to the new TTSService using Piper TTS backend."""
 
     def __init__(
         self,
         voice_index: int = 0,
         rate: int = 175,
         volume: float = 1.0,
-        coqui_model: str = "tts_models/en/ljspeech/tacotron2-DDC",
+        coqui_model: str = "",
     ) -> None:
-        self.voice_index = voice_index
-        self.rate = rate
-        self._volume = self._clamp_volume(volume)
-        self.coqui_model = coqui_model
-
-        self._engine = None
-        self._coqui = None
-        self._coqui_cache: Dict[str, str] = {}
-        self._queue: "queue.PriorityQueue[_SpeechRequest]" = queue.PriorityQueue()
-        self._sequence = 0
-        self._worker: Optional[threading.Thread] = None
-        self._stop_event = threading.Event()
-        self._busy = threading.Event()
-        self._lock = threading.Lock()
-        self._ready = False
-        self._speak_counter = 0
+        self.service = TTSService()
+        self.service.volume = volume
+        if rate != 175 and rate > 0:
+            self.service.engine.length_scale = 175.0 / rate
 
     @property
     def is_speaking(self) -> bool:
-        return self._busy.is_set()
+        return self.service.is_speaking
 
     @property
     def volume(self) -> float:
-        return self._volume
+        return self.service.volume
 
     @volume.setter
     def volume(self, value: float) -> None:
-        self._volume = self._clamp_volume(value)
-        if self._engine is not None:
-            self._engine.setProperty("volume", self._volume)
-
-    def _clamp_volume(self, value: float) -> float:
-        return max(0.0, min(1.0, float(value)))
-
-    def _ensure_engine(self):
-        # Engine must only be initialized from within the worker thread.
-        # Calling this from outside the worker will raise to catch misuse.
-        if pyttsx3 is None:
-            raise RuntimeError("pyttsx3 is not installed. Install it with pip.")
-        if self._engine is None:
-            print("[TTS] Initializing COM")
-            pythoncom.CoInitialize()
-            print("[TTS] Initializing pyttsx3")
-            self._engine = pyttsx3.init()
-            voices = self._engine.getProperty("voices") or []
-            if voices:
-                index = min(max(self.voice_index, 0), len(voices) - 1)
-                self._engine.setProperty("voice", voices[index].id)
-            self._engine.setProperty("rate", self.rate)
-            self._engine.setProperty("volume", self._volume)
-            print("[TTS] pyttsx3 ready")
+        self.service.volume = value
 
     def _ensure_worker(self) -> None:
-        if self._worker and self._worker.is_alive():
-            return
-
-        self._stop_event.clear()
-        engine_ready = threading.Event()
-
-        def _loop() -> None:
-            print(f"[INSTRUMENTATION] Worker started (thread id: {threading.get_ident()})", flush=True)
-            # Initialize COM and pyttsx3 here, inside the dedicated worker thread
-            try:
-                self._ensure_engine()
-            except Exception as e:
-                print(f"[INSTRUMENTATION] Worker engine init failed: {e}", flush=True)
-                traceback.print_exc()
-            finally:
-                engine_ready.set()  # unblock _ensure_worker caller
-
-            while not self._stop_event.is_set():
-                try:
-                    request = self._queue.get(timeout=0.2)
-                except queue.Empty:
-                    continue
-
-                print(f"[INSTRUMENTATION] Worker dequeued item: {request.text!r}", flush=True)
-                self._busy.set()
-                try:
-                    print(f"[INSTRUMENTATION] Speaking text: {request.text!r}", flush=True)
-                    self._speak_impl(request.text)
-                except Exception as e:
-                    print(f"[INSTRUMENTATION] Worker exception during _speak_impl: {e}", flush=True)
-                    traceback.print_exc()
-                finally:
-                    self._busy.clear()
-                    print(f"[INSTRUMENTATION] Finally block executed for request: {request.text!r}", flush=True)
-                    if request.done_event:
-                        request.done_event.set()
-
-            # Reset engine so a future _ensure_worker call re-initializes cleanly
-            self._engine = None
-            print("[INSTRUMENTATION] Worker loop exited.", flush=True)
-
-        self._worker = threading.Thread(target=_loop, daemon=True)
-        self._worker.start()
-        # Wait for engine to finish initializing before returning
-        engine_ready.wait(timeout=15)
-
-    def _ensure_coqui(self):
-        if CoquiTTS is None:
-            raise RuntimeError("Coqui TTS is not installed. Install package `TTS`.")
-        if self._coqui is None:
-            self._coqui = CoquiTTS(model_name=self.coqui_model, progress_bar=False, gpu=False)
-
-    def warm_common_phrases(self) -> None:
-        """Preload speech resources for common Jarvis phrases."""
-        for phrase in COMMON_JARVIS_PHRASES:
-            self._precache_phrase(phrase)
-
-    def _precache_phrase(self, phrase: str) -> None:
-        if CoquiTTS is None:
-            self._ensure_engine()
-            return
-
-        normalized = clean_response_text(phrase)
-        if normalized in self._coqui_cache:
-            return
-
-        try:
-            path = self.synthesize(normalized)
-            self._coqui_cache[normalized] = path
-        except Exception:
-            # Cache warm-up should never break speech output.
-            return
-
-    def preprocess(self, text: str) -> List[str]:
-        return split_text_for_tts(text)
+        self.service._ensure_worker()
 
     def speak(self, text: str, priority: str = "normal") -> None:
-        """Speak text synchronously.
-        
-        Blocks until speech completes or the worker dies (max 30s safety timeout).
-        """
-        self._speak_counter += 1
-        req_id = f"sp_{self._speak_counter:02d}"
-        
-        cur_thread = threading.current_thread()
-        worker_alive = self._worker.is_alive() if self._worker else False
-        worker_id = self._worker.ident if self._worker else None
-        q_size_before = self._queue.qsize()
-        
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] speak() called with text: {text!r}")
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current thread: name={cur_thread.name}, id={cur_thread.ident}")
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Worker thread alive?: {worker_alive}")
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Worker thread id: {worker_id}")
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Queue size before enqueue: {q_size_before}")
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Engine initialized?: {self._engine is not None}")
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current busy flag: {self._busy.is_set()}")
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current stop flag: {self._stop_event.is_set()}")
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current speaking flag (is_speaking): {self.is_speaking}")
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Current engine object id: {id(self._engine) if self._engine is not None else None}")
-        
-        self._ensure_worker()
-        self._drain_queue()
-        done_event = threading.Event()
-        self._enqueue(text, priority=priority, done_event=done_event)
-        
-        q_size_after = self._queue.qsize()
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] Queue size after enqueue: {q_size_after}")
-        
-        done_event.wait(timeout=30.0)
-        print(f"[INSTRUMENTATION] [ReqID: {req_id}] done_event.wait returned.")
+        self.service.speak(text, priority)
 
     def speak_async(self, text: str, priority: str = "normal") -> None:
-        """Speak text without blocking the caller."""
-        self._ensure_worker()
-        self._enqueue(text, priority=priority, done_event=None)
+        self.service.speak_async(text, priority)
 
     def interrupt_and_speak(self, text: str) -> None:
-        """Stop current speech and replace it with urgent text."""
-        self._ensure_worker()
-        self._drain_queue()
-        self._enqueue(text, priority="urgent", done_event=None)
+        self.service.interrupt_and_speak(text)
 
     def stop_current_speech(self) -> None:
-        """Signal the worker to stop after the current chunk finishes.
-        
-        Safe to call from any thread — does not touch the pyttsx3 engine directly.
-        Drains the queue so no further items are spoken.
-        """
-        self._drain_queue()
+        self.service.stop()
 
-    def _enqueue(self, text: str, priority: str, done_event: Optional[threading.Event]) -> None:
-        priority_value = self._priority_value(priority)
-        with self._lock:
-            self._sequence += 1
-            request = _SpeechRequest(priority_value, self._sequence, text, done_event)
-            self._queue.put(request)
-
-    def _drain_queue(self) -> None:
-        with self._lock:
-            while True:
-                try:
-                    self._queue.get_nowait()
-                except queue.Empty:
-                    break
-
-    def _priority_value(self, priority: str) -> int:
-        mapping = {
-            "urgent": 0,
-            "high": 1,
-            "normal": 2,
-            "low": 3,
-        }
-        return mapping.get(priority, 2)
-
-    def _speak_impl(self, text: str) -> None:
-        clean = clean_response_text(text)
-        if not clean:
-            return
-
-        chunks = self.preprocess(clean)
-        if not chunks:
-            return
-
-        if self._has_coqui_available() and clean in self._coqui_cache:
-            self.play_audio(self._coqui_cache[clean])
-            return
-
-        self._ensure_engine()
-
-        # Reset SAPI5 AudioOutputStream to force re-binding to default audio device
-        if hasattr(self._engine, "proxy") and hasattr(self._engine.proxy, "_driver"):
-            driver = self._engine.proxy._driver
-            if hasattr(driver, "_tts"):
-                try:
-                    driver._tts.AudioOutputStream = None
-                except Exception as e:
-                    print(f"[TTS] Warning: Failed to reset AudioOutputStream: {e}")
-
-        for index, chunk in enumerate(chunks):
-            self._engine.say(chunk)
-            print(f"[INSTRUMENTATION] runAndWait() entered for chunk: {chunk!r}", flush=True)
-            try:
-                self._engine.runAndWait()
-                print(f"[INSTRUMENTATION] runAndWait() exited for chunk: {chunk!r}", flush=True)
-            except Exception as e:
-                print(f"[INSTRUMENTATION] runAndWait() exception for chunk {chunk!r}: {e}", flush=True)
-                traceback.print_exc()
-                raise
-            if index < len(chunks) - 1:
-                time.sleep(0.18)
-
-    def _has_coqui_available(self) -> bool:
-        return CoquiTTS is not None
+    def stop(self) -> None:
+        self.service.stop()
 
     def synthesize(self, text: str) -> str:
-        """Synthesise text to a WAV file using Coqui TTS."""
-        self._ensure_coqui()
-        normalized = clean_response_text(text)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-            output_path = temp_file.name
-        self._coqui.tts_to_file(text=normalized, file_path=output_path)
-        return output_path
+        return self.service.synthesize(text)
 
     def play_audio(self, file_path: str) -> None:
-        """Play a WAV file using playsound when available."""
-        if playsound is None:
-            raise RuntimeError("playsound is not installed. Install it with pip.")
-        playsound(file_path)
-
-    def preload_common_phrases(self) -> None:
-        """Alias kept for readability."""
-        self.warm_common_phrases()
+        self.service.play_audio(file_path)
 
     def shutdown(self) -> None:
-        self._stop_event.set()
-        try:
-            self.stop_current_speech()
-        except Exception:
-            pass
-        if self._worker and self._worker.is_alive():
-            self._worker.join(timeout=2.0)
+        self.service.shutdown()
+
+    def warm_common_phrases(self) -> None:
+        pass
+
+    def preload_common_phrases(self) -> None:
+        pass
 
 
 _default_tts_manager = TTSManager()
