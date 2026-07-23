@@ -303,42 +303,6 @@ Voice Response
 
 ---
 
-# 📈 Roadmap
-
-### Phase 1
-
-- Voice Assistant
-- Local LLM
-- Basic Desktop Control
-
----
-
-### Phase 2
-
-- Browser Automation
-- Memory
-- Scheduling
-
----
-
-### Phase 3
-
-- AI Planning
-- Workflow Engine
-- Plugin System
-
----
-
-### Phase 4
-
-- Vision
-- OCR
-- Autonomous Agent
-- Mobile Companion
-- Multi-platform Support
-
----
-
 # 🔐 Privacy
 
 N.O.V.A. is designed with a privacy-first philosophy.
@@ -378,12 +342,6 @@ feel free to open a Pull Request.
 - Cloud synchronization
 - Plugin marketplace
 - Self-improving workflows
-
----
-
-# 📄 License
-
-MIT License
 
 ---
 
