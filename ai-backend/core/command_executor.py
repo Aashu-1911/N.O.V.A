@@ -29,6 +29,7 @@ Handler implementations live in ``handlers/``.
 Response helpers live in ``core/response_builder``.
 """
 
+import time
 from typing import Any, Dict, Optional
 
 from core.command_chain import split_commands, execute_chain
@@ -53,6 +54,7 @@ from handlers.window_handler import (
     handle_list_windows,
     handle_get_active_window,
 )
+from handlers.query_handler import handle_query_context, handle_browser_back
 
 # Convenience alias used in this module and re-usable by callers.
 ResponseDict = Dict[str, Any]
@@ -106,6 +108,8 @@ HANDLERS: Dict[str, Any] = {
     "get_active_window": handle_get_active_window,
     "answer_question": handle_general_chat,  # Default intent from intent_parser
     "general_chat": handle_general_chat,      # Alias for explicit general_chat intent
+    "query_context": handle_query_context,
+    "browser_go_back": handle_browser_back,
 }
 
 
@@ -116,6 +120,8 @@ HANDLERS: Dict[str, Any] = {
 def execute_single(
     command: str,
     context: Optional[Dict[str, Any]] = None,
+    context_manager: Optional[Any] = None,
+    parent_command: Optional[str] = None,
 ) -> ResponseDict:
     """Internal single-command execution path: intent parse → handler → response.
 
@@ -126,20 +132,45 @@ def execute_single(
     Args:
         command: A single raw command string.
         context: Optional context dict (``raw_command`` is auto-populated).
+        context_manager: Optional ExecutionContextManager instance.
+        parent_command: Optional top-level user command if this is a sub-command.
 
     Returns:
         ResponseDict from the matched handler, with ``intent`` injected.
     """
+    t0 = time.time()
     try:
+        # Normalize action verbs to canonical form before intent parsing
+        from core.context_resolver import normalize_command_verbs
+        command = normalize_command_verbs(command)
+
         # Parse intent using existing intent_parser
         result = parse_intent(command)
         intent = result["intent"]
         entities = result["entities"]
 
-        # Inject raw command into context so handlers (especially general_chat) can access it
+        # Run context resolver if manager is present to perform pronoun/repeat resolution
+        if context_manager:
+            from core.context_resolver import ContextResolver
+            resolver = ContextResolver()
+            snapshot = context_manager.get_snapshot()
+            resolved_command, resolved_intent, resolved_entities, direct_response = resolver.resolve(
+                command, intent, entities, snapshot
+            )
+            
+            if direct_response:
+                return direct_response
+
+            command = resolved_command
+            intent = resolved_intent
+            entities = resolved_entities
+
+        # Inject raw command and context manager into context dict for downstream handlers
         if context is None:
             context = {}
         context["raw_command"] = command
+        if context_manager:
+            context["context_manager"] = context_manager
 
         # Route to appropriate handler using simple dict lookup
         handler = HANDLERS.get(intent, handle_general_chat)
@@ -150,16 +181,33 @@ def execute_single(
         # Ensure response includes intent for debugging
         response["intent"] = intent
 
+        if context_manager:
+            execution_time = time.time() - t0
+            if response.get("status") == "error":
+                context_manager.update_from_failure(
+                    command, response, execution_time, parent_command=parent_command
+                )
+            else:
+                context_manager.update_from_execution(
+                    command, response, execution_time, parent_command=parent_command
+                )
+
         return response
 
     except Exception as e:
         # Error handling — return safe fallback dict
-        return {
+        response = {
             "status": "error",
             "reply": "I'm sorry, something went wrong processing that command.",
             "payload": {"error": str(e)},
             "intent": "unknown",
         }
+        if context_manager:
+            execution_time = time.time() - t0
+            context_manager.update_from_failure(
+                command, response, execution_time, parent_command=parent_command
+            )
+        return response
 
 
 # ============================================================================
@@ -169,6 +217,7 @@ def execute_single(
 def execute_command(
     command: str,
     context: Optional[Dict[str, Any]] = None,
+    context_manager: Optional[Any] = None,
 ) -> ResponseDict:
     """Execute a natural-language command and return a structured response dict.
 
@@ -176,46 +225,21 @@ def execute_command(
     (voice, HTTP, GUI, CLI, etc.).  The caller is responsible for any
     interface-specific output (calling ``speak()``, serialising to JSON, etc.).
 
-    Steps performed:
-
-    1. Parse ``command`` into an intent + entities via :mod:`core.intent_parser`.
-    2. Inject ``command`` into ``context["raw_command"]`` so fallback handlers
-       (e.g. :func:`handlers.chat_handler.handle_general_chat`) can access it.
-    3. Look up the handler in :data:`HANDLERS`; fall back to
-       :func:`handlers.chat_handler.handle_general_chat` for unknown intents.
-    4. Call the handler and attach the ``intent`` key to the response.
-
     Args:
         command: Raw command text (e.g. ``"Add task to learn Docker"``).
         context: Optional context dict.  Common keys:
-
             - ``raw_command`` — auto-populated by this function.
             - ``user_id`` — optional user identifier for multi-user scenarios.
             - ``session_id`` — optional session identifier.
+        context_manager: Optional ExecutionContextManager instance.
 
     Returns:
-        ResponseDict with the following keys:
-
-        - ``status`` *(str)* — ``"success"``, ``"error"``, or ``"partial"``.
-        - ``reply`` *(str)* — human-readable response text for the user.
-        - ``intent`` *(str)* — detected intent name (useful for debugging).
-        - ``payload`` *(dict | None)* — optional additional structured data.
-        - ``metadata`` *(dict | None)* — optional debug / diagnostic data.
-
-    Example::
-
-        response = execute_command("Add task to learn Docker")
-        # {
-        #   "status": "success",
-        #   "reply": "Added task: learn Docker",
-        #   "intent": "add_task",
-        #   "payload": {"task_id": 42, ...},
-        # }
-
-        response = execute_command("How are you?")
-        # {"status": "success", "reply": "I'm doing well! ...", "intent": "answer_question"}
+        ResponseDict with standard keys: status, reply, intent, payload, metadata.
     """
     commands = split_commands(command)
     if len(commands) >= 2:
-        return execute_chain(commands, execute_single)
-    return execute_single(command, context)
+        return execute_chain(
+            commands,
+            lambda cmd, ctx: execute_single(cmd, ctx, context_manager, parent_command=command)
+        )
+    return execute_single(command, context, context_manager)

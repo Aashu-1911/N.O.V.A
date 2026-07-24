@@ -57,9 +57,12 @@ def main():
     print("[INIT] TTS ready.")
 
     # Load VoiceInputManager and pre-load Whisper
+    from core.context_manager import ExecutionContextManager
+    context_manager = ExecutionContextManager()
+
     print(f"[INIT] Starting voice listener with Whisper '{VOICE_MODEL}' model...")
     vm = VoiceInputManager(model_name=VOICE_MODEL)
-    vm.on_command(voice_command_callback)
+    vm.on_command(lambda text: voice_command_callback(text, context_manager=context_manager))
     
     print("[INIT] Pre-loading Whisper model (this takes 1-3 min on first run)...")
     vm._load_model()
@@ -88,7 +91,7 @@ def main():
 
             if cmd_text:
                 vm.set_state(vm.STATE_SPEAKING)
-                voice_command_callback(cmd_text)
+                voice_command_callback(cmd_text, context_manager=context_manager)
             
             vm.set_state(vm.STATE_IDLE)
 

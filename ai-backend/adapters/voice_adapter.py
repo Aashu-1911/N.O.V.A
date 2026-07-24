@@ -106,7 +106,10 @@ def format_for_voice(text: str) -> str:
 # Callback registered with VoiceInputManager
 # ---------------------------------------------------------------------------
 
-def voice_command_callback(command_text: str) -> None:
+def voice_command_callback(
+    command_text: str,
+    context_manager: Optional[Any] = None,
+) -> None:
     """Handle a transcribed voice command end-to-end.
 
     This function is designed to be registered with
@@ -126,6 +129,7 @@ def voice_command_callback(command_text: str) -> None:
     Args:
         command_text: Raw transcribed text received from the STT engine
             (e.g. ``"Add task to learn Docker"``).
+        context_manager: Optional ExecutionContextManager instance.
 
     Returns:
         ``None``.  Side-effects only: calls ``speak()`` with the assistant reply.
@@ -140,6 +144,7 @@ def voice_command_callback(command_text: str) -> None:
         voice_command_callback("Show my tasks")
         # → calls speak("Here are your tasks: …")
     """
+    from typing import Any
     if not command_text or not command_text.strip():
         logger.debug("voice_command_callback received empty text, ignoring")
         return
@@ -173,7 +178,10 @@ def voice_command_callback(command_text: str) -> None:
         if metrics:
             metrics.execution_start = time.time()
             
-        response = execute_command(command_text)
+        if context_manager is not None:
+            response = execute_command(command_text, context_manager=context_manager)
+        else:
+            response = execute_command(command_text)
         
         if metrics:
             metrics.execution_end = time.time()

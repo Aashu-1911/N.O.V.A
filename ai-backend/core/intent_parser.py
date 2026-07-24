@@ -168,7 +168,7 @@ def _extract_application(text: str):
             return app
 
     # Fallback to extracting the word immediately following action verbs
-    pattern = r"\b(?:open|close|exit|quit|terminate|kill|launch|start|run)\s+([a-zA-Z0-9\s]+?)(?:\s+(?:window|app|application|program))?\s*$"
+    pattern = r"\b(?:open|close|exit|quit|terminate|kill|launch|start|run|remove)\s+([a-zA-Z0-9\s]+?)(?:\s+(?:window|app|application|program))?\s*$"
     match = re.search(pattern, lower_text)
     if match:
         candidate = match.group(1).strip()
@@ -307,7 +307,7 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
     elif re.search(r"\bmaximize\b", normalized) and _is_window_action_context(normalized, text):
         intent = "maximize_window"
     # Check for close BEFORE checking for application names
-    elif re.search(r"\b(close|exit|quit|terminate|kill)\b", normalized):
+    elif re.search(r"\b(close|exit|quit|terminate|kill|remove)\b", normalized):
         intent = "close_application"
     elif _extract_application(text):
         intent = "open_application"
