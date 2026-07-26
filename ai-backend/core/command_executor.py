@@ -117,6 +117,72 @@ HANDLERS: Dict[str, Any] = {
 # Private single-command execution path
 # ============================================================================
 
+def get_legacy_intent_name(capability_name: str, verb: str, obj: str = "") -> str:
+    """Map capability and parsed verb to legacy intent name for backward compatibility."""
+    verb_lower = (verb or "").lower()
+    obj_lower = (obj or "").lower()
+    
+    if capability_name == "WindowCapability":
+        if verb_lower == "open":
+            return "open_application"
+        if verb_lower == "close":
+            return "close_application"
+        if verb_lower == "focus":
+            return "focus_window"
+        if verb_lower == "maximize":
+            return "maximize_window"
+        if verb_lower == "minimize":
+            return "minimize_window"
+        if verb_lower == "restore":
+            return "restore_window"
+        if verb_lower == "list":
+            return "list_windows"
+            
+    elif capability_name == "BrowserCapability":
+        if verb_lower == "open":
+            return "open_website"
+        if verb_lower == "search":
+            return "search_web"
+        if verb_lower == "go":
+            return "browser_go_back"
+        if verb_lower == "refresh":
+            return "browser_refresh"
+            
+    elif capability_name == "VolumeCapability":
+        return "volume_control"
+        
+    elif capability_name == "MediaCapability":
+        return "media_control"
+        
+    elif capability_name == "TaskManagementCapability":
+        if verb_lower == "add":
+            return "add_task"
+        if verb_lower == "complete":
+            return "complete_task"
+        if verb_lower == "update":
+            return "update_task"
+        if verb_lower in {"show", "list"}:
+            if "stat" in obj_lower:
+                return "show_stats"
+            return "show_tasks"
+            
+    elif capability_name == "SystemCapability":
+        if verb_lower == "lock" or "lock" in verb_lower:
+            return "lock_pc"
+        if verb_lower == "screenshot":
+            return "take_screenshot"
+        if verb_lower == "reminder":
+            return "reminder"
+            
+    elif capability_name == "ConversationCapability":
+        return "query_context"
+        
+    elif capability_name == "GeneralLLMCapability":
+        return "general_chat"
+        
+    return verb_lower or "unknown"
+
+
 def execute_single(
     command: str,
     context: Optional[Dict[str, Any]] = None,
@@ -144,52 +210,66 @@ def execute_single(
         from core.context_resolver import normalize_command_verbs
         command = normalize_command_verbs(command)
 
-        # Parse intent using existing intent_parser
-        result = parse_intent(command)
-        intent = result["intent"]
-        entities = result["entities"]
+        # 1. Parse the command using lightweight CommandParser
+        from capabilities import CommandParser
+        parsed_cmd = CommandParser.parse(command)
 
-        # Run context resolver if manager is present to perform pronoun/repeat resolution
+        # 2. Context Resolver performs pronoun and repeat resolution before routing
+        from core.context_resolver import ContextResolver
+        from core.execution_context import ExecutionContext
+        resolver = ContextResolver()
         if context_manager:
-            from core.context_resolver import ContextResolver
-            resolver = ContextResolver()
             snapshot = context_manager.get_snapshot()
-            resolved_command, resolved_intent, resolved_entities, direct_response = resolver.resolve(
-                command, intent, entities, snapshot
-            )
-            
-            if direct_response:
-                return direct_response
+        else:
+            snapshot = ExecutionContext()
+            if context:
+                for k, v in context.items():
+                    if hasattr(snapshot, k):
+                        setattr(snapshot, k, v)
+        
+        resolved_cmd = resolver.resolve(parsed_cmd, snapshot)
 
-            command = resolved_command
-            intent = resolved_intent
-            entities = resolved_entities
+        # If resolver generated a direct clarification response
+        if resolved_cmd.direct_response is not None:
+            response = resolved_cmd.direct_response
+            if context_manager:
+                execution_time = time.time() - t0
+                context_manager.update_from_execution(
+                    resolved_cmd.raw_command, response, execution_time, parent_command=parent_command
+                )
+            return response
 
-        # Inject raw command and context manager into context dict for downstream handlers
+        # 3. Inject context manager and resolved raw command
         if context is None:
             context = {}
-        context["raw_command"] = command
+        context["raw_command"] = resolved_cmd.raw_command
         if context_manager:
             context["context_manager"] = context_manager
 
-        # Route to appropriate handler using simple dict lookup
-        handler = HANDLERS.get(intent, handle_general_chat)
+        # 4. Route and dispatch via central CapabilityRouter
+        from capabilities import CapabilityRouter
+        router = CapabilityRouter()
+        cap_response = router.route_and_dispatch(resolved_cmd, context)
 
-        # Call handler and get response
-        response = handler(entities, context)
-
-        # Ensure response includes intent for debugging
-        response["intent"] = intent
+        # Convert to dictionary layout preserving backward compatibility
+        response = cap_response.to_dict()
+        legacy_intent = get_legacy_intent_name(cap_response.handled_by, resolved_cmd.verb, resolved_cmd.object)
+        response["intent"] = legacy_intent
 
         if context_manager:
             execution_time = time.time() - t0
             if response.get("status") == "error":
                 context_manager.update_from_failure(
-                    command, response, execution_time, parent_command=parent_command
+                    resolved_cmd.raw_command, response, execution_time, parent_command=parent_command
                 )
             else:
                 context_manager.update_from_execution(
-                    command, response, execution_time, parent_command=parent_command
+                    resolved_cmd.raw_command,
+                    response,
+                    execution_time,
+                    parent_command=parent_command,
+                    context_updates=cap_response.context_updates,
+                    entities=resolved_cmd.entities
                 )
 
         return response

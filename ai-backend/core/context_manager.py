@@ -65,6 +65,8 @@ class ExecutionContextManager:
         result: Dict[str, Any],
         execution_time: float = 0.0,
         parent_command: Optional[str] = None,
+        context_updates: Optional[Dict[str, Any]] = None,
+        entities: Optional[Dict[str, Any]] = None
     ) -> None:
         """Update context and history state after a successful command execution."""
         with self._lock:
@@ -72,13 +74,14 @@ class ExecutionContextManager:
             intent = result.get("intent", "unknown")
             payload = result.get("payload") or {}
 
-            # Parse entities using intent_parser
-            from core.intent_parser import parse_intent
-            try:
-                parsed = parse_intent(command)
-                entities = parsed.get("entities") or {}
-            except Exception:
-                entities = {}
+            # Use passed entities if available, otherwise fallback to parse_intent
+            if entities is None:
+                from core.intent_parser import parse_intent
+                try:
+                    parsed = parse_intent(command)
+                    entities = parsed.get("entities") or {}
+                except Exception:
+                    entities = {}
 
             # Update common context fields
             self._context.last_command = command
@@ -89,61 +92,81 @@ class ExecutionContextManager:
             self._context.last_error = None
             self._context.execution_timestamp = time.time()
 
-            # Mappings for specific intents and fields updates
-            if intent == "open_application":
-                app_name = entities.get("app_name") or payload.get("app_name")
-                if app_name:
-                    self._context.current_application = app_name
-                    self._context.last_opened_application = app_name
-                    self._context.current_window = app_name
-                    self._context.last_app = app_name
-                    self._context.last_window = app_name
-                    self._dispatcher.dispatch("APPLICATION_OPENED", {"app_name": app_name})
-            
-            elif intent == "close_application":
-                app_name = entities.get("app_name") or payload.get("app_name")
-                if app_name:
-                    self._context.last_closed_application = app_name
-                    if self._context.current_application == app_name:
-                        self._context.current_application = None
-                        self._context.current_window = None
-                    self._dispatcher.dispatch("APPLICATION_CLOSED", {"app_name": app_name})
+            # Apply explicit context updates if supplied (new capability model)
+            if context_updates is not None:
+                for k, v in context_updates.items():
+                    if hasattr(self._context, k):
+                        setattr(self._context, k, v)
+                
+                # Dispatch events based on updates
+                if "current_application" in context_updates and context_updates["current_application"]:
+                    self._dispatcher.dispatch("APPLICATION_OPENED", {"app_name": context_updates["current_application"]})
+                if "last_closed_application" in context_updates and context_updates["last_closed_application"]:
+                    self._dispatcher.dispatch("APPLICATION_CLOSED", {"app_name": context_updates["last_closed_application"]})
+                if "current_url" in context_updates and context_updates["current_url"]:
+                    self._dispatcher.dispatch("URL_OPENED", {"url": context_updates["current_url"]})
+                if "last_search_query" in context_updates and context_updates["last_search_query"]:
+                    self._dispatcher.dispatch("SEARCH_PERFORMED", {"query": context_updates["last_search_query"], "url": context_updates.get("current_url")})
+                if "last_volume_action" in context_updates and context_updates["last_volume_action"]:
+                    self._dispatcher.dispatch("VOLUME_CHANGED", {"action": context_updates["last_volume_action"]})
+                if "current_window" in context_updates and context_updates["current_window"]:
+                    self._dispatcher.dispatch("WINDOW_FOCUSED", {"window_title": context_updates["current_window"], "operation": context_updates.get("last_window_operation", "focus")})
+            else:
+                # Legacy updates path
+                if intent == "open_application":
+                    app_name = entities.get("app_name") or payload.get("app_name")
+                    if app_name:
+                        self._context.current_application = app_name
+                        self._context.last_opened_application = app_name
+                        self._context.current_window = app_name
+                        self._context.last_app = app_name
+                        self._context.last_window = app_name
+                        self._dispatcher.dispatch("APPLICATION_OPENED", {"app_name": app_name})
+                
+                elif intent == "close_application":
+                    app_name = entities.get("app_name") or payload.get("app_name")
+                    if app_name:
+                        self._context.last_closed_application = app_name
+                        if self._context.current_application == app_name:
+                            self._context.current_application = None
+                            self._context.current_window = None
+                        self._dispatcher.dispatch("APPLICATION_CLOSED", {"app_name": app_name})
 
-            elif intent == "open_website":
-                url = payload.get("url") or entities.get("url")
-                if url:
-                    self._context.current_url = url
-                    self._context.last_website = url
-                    self._context.current_browser = "Chrome"
-                    self._dispatcher.dispatch("URL_OPENED", {"url": url})
-
-            elif intent == "search_web":
-                query = entities.get("search_query") or payload.get("query")
-                url = payload.get("url")
-                if query:
-                    self._context.last_search_query = query
-                    self._context.current_browser = "Chrome"
+                elif intent == "open_website":
+                    url = payload.get("url") or entities.get("url")
                     if url:
                         self._context.current_url = url
-                    self._dispatcher.dispatch("SEARCH_PERFORMED", {"query": query, "url": url})
+                        self._context.last_website = url
+                        self._context.current_browser = "Chrome"
+                        self._dispatcher.dispatch("URL_OPENED", {"url": url})
 
-            elif intent == "volume_control":
-                action = entities.get("volume_action") or payload.get("action")
-                if action:
-                    self._context.last_volume_action = action
-                    self._dispatcher.dispatch("VOLUME_CHANGED", {"action": action})
+                elif intent == "search_web":
+                    query = entities.get("search_query") or payload.get("query")
+                    url = payload.get("url")
+                    if query:
+                        self._context.last_search_query = query
+                        self._context.current_browser = "Chrome"
+                        if url:
+                            self._context.current_url = url
+                        self._dispatcher.dispatch("SEARCH_PERFORMED", {"query": query, "url": url})
 
-            elif intent in ["focus_window", "maximize_window", "minimize_window", "restore_window"]:
-                op = intent.replace("_window", "")
-                self._context.last_window_operation = op
-                window_title = payload.get("window_title")
-                window_handle = payload.get("window_handle")
-                if window_title:
-                    self._context.current_window = window_title
-                    self._context.last_window = window_title
-                if window_handle:
-                    self._context.last_window_handle = window_handle
-                self._dispatcher.dispatch("WINDOW_FOCUSED", {"window_title": window_title, "operation": op})
+                elif intent == "volume_control":
+                    action = entities.get("volume_action") or payload.get("action")
+                    if action:
+                        self._context.last_volume_action = action
+                        self._dispatcher.dispatch("VOLUME_CHANGED", {"action": action})
+
+                elif intent in ["focus_window", "maximize_window", "minimize_window", "restore_window"]:
+                    op = intent.replace("_window", "")
+                    self._context.last_window_operation = op
+                    window_title = payload.get("window_title")
+                    window_handle = payload.get("window_handle")
+                    if window_title:
+                        self._context.current_window = window_title
+                        self._context.last_window = window_title
+                    if window_handle:
+                        self._context.last_window_handle = window_handle
+                    self._dispatcher.dispatch("WINDOW_FOCUSED", {"window_title": window_title, "operation": op})
 
             # Record handler execution info into bounded history
             from core.command_executor import HANDLERS

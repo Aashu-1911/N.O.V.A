@@ -1,9 +1,11 @@
 from typing import Any, Dict, Tuple, Optional
 import re
 from core.execution_context import ExecutionContext
+from capabilities.base import ParsedCommand
+from capabilities.parser import CommandParser
 
 def normalize_command_verbs(command: str) -> str:
-    """Normalize action verbs to canonical form before intent parsing."""
+    """Normalize action verbs to canonical form before semantic parsing."""
     normalized = command.strip().lower()
     
     # Close synonyms
@@ -56,81 +58,61 @@ def resolve_window_from_context(snapshot: ExecutionContext) -> Optional[str]:
 
 class ContextResolver:
     """Resolves referring expressions (pronouns like 'it', 'that', or repeat triggers 'again')
-    using state snapshot stored in the Execution Context.
+    using state snapshot stored in the Execution Context before routing.
     """
     def resolve(
         self,
-        command: str,
-        intent: str,
-        entities: Dict[str, Any],
+        parsed: ParsedCommand,
         snapshot: ExecutionContext,
-    ) -> Tuple[str, str, Dict[str, Any], Optional[Dict[str, Any]]]:
+    ) -> ParsedCommand:
         """Resolves pronouns, repeat triggers, or context questions based on context snapshot.
         
         Returns:
-            Tuple of (resolved_command, resolved_intent, resolved_entities, direct_response)
+            Resolved ParsedCommand
         """
-        normalized = command.strip().lower()
+        resolved = ParsedCommand(
+            raw_command=parsed.raw_command,
+            verb=parsed.verb,
+            object=parsed.object,
+            scope=parsed.scope,
+            entities=dict(parsed.entities)
+        )
+        
+        raw_lower = parsed.raw_command.lower()
+        normalized_obj = (resolved.object or "").strip().lower()
 
-        # Rule 6: "Open it again" -> use last_opened_application (checked first to avoid generic repeat)
-        if re.search(r"\b(open\s+it\s+again|open\s+again)\b", normalized):
-            resolved_app = snapshot.last_opened_application or snapshot.current_application or snapshot.last_app
-            if resolved_app:
-                resolved_entities = dict(entities)
-                resolved_entities["app_name"] = resolved_app
-                resolved_cmd = f"open {resolved_app}"
-                self._log_rewrite(command, resolved_cmd, "Used last_opened_application")
-                return resolved_cmd, "open_application", resolved_entities, None
+        # Rule 1: Repeat command if "again", "repeat", "do it again" is detected
+        if re.search(r"\b(again|repeat|repeat\s+that|do\s+it\s+again|last\s+command)\b", raw_lower):
+            # Special check for "search again", which is Rule 2
+            if resolved.verb == "search" and normalized_obj == "again":
+                pass
+            # Special check for "open it again", which is Rule 3
+            elif resolved.verb == "open" and normalized_obj == "it again":
+                pass
             else:
-                self._log_no_rewrite("No application in context for 'open again'")
+                last_cmd = None
+                if snapshot.last_success and snapshot.last_command:
+                    last_cmd = snapshot.last_command
+                elif snapshot.history:
+                    for entry in reversed(snapshot.history):
+                        if entry.get("status") == "success":
+                            last_cmd = entry.get("command")
+                            break
+                if last_cmd:
+                    self._log_rewrite(parsed.raw_command, last_cmd, "Repeated last successful command")
+                    return CommandParser.parse(last_cmd)
 
-        # Rule 10: "Search again" -> Reuse last_search_query (checked first to avoid generic repeat)
-        if re.search(r"\b(search\s+again)\b", normalized):
+        # Rule 2: "Search again" -> Reuse last_search_query
+        if resolved.verb == "search" and normalized_obj == "again":
             if snapshot.last_search_query:
-                resolved_entities = dict(entities)
-                resolved_entities["search_query"] = snapshot.last_search_query
-                resolved_cmd = f"search {snapshot.last_search_query}"
-                self._log_rewrite(command, resolved_cmd, "Used last_search_query")
-                return resolved_cmd, "search_web", resolved_entities, None
-            else:
-                self._log_no_rewrite("No search query in context to repeat")
+                resolved.object = snapshot.last_search_query
+                resolved.entities["search_query"] = snapshot.last_search_query
+                resolved.raw_command = f"search {snapshot.last_search_query}"
+                self._log_rewrite(parsed.raw_command, resolved.raw_command, "Repeated last search query")
+                return resolved
 
-        # Rule 7: "Do it again" -> Repeat last successful command (uses specific exact matches)
-        if re.search(r"^(do it\s+)?again$|^(repeat\s+that|repeat|repeat\s+last\s+command)$", normalized):
-            last_success_cmd = None
-            if snapshot.last_success and snapshot.last_command:
-                last_success_cmd = snapshot.last_command
-            elif snapshot.history:
-                for entry in reversed(snapshot.history):
-                    if entry.get("status") == "success":
-                        last_success_cmd = entry.get("command")
-                        break
-            if last_success_cmd:
-                from core.intent_parser import parse_intent
-                parsed = parse_intent(last_success_cmd)
-                self._log_rewrite(command, last_success_cmd, "Used last successful command from history")
-                return last_success_cmd, parsed["intent"], parsed["entities"], None
-            else:
-                self._log_no_rewrite("No previous successful command in history to repeat")
-
-        # Rule 8: "Go back" -> If current_browser exists
-        if re.search(r"\b(go\s+back|navigate\s+back)\b", normalized):
-            if snapshot.current_browser:
-                self._log_rewrite(command, command, f"Routed to navigation because current_browser={snapshot.current_browser}")
-                return command, "browser_go_back", dict(entities), None
-            else:
-                self._log_no_rewrite("No active browser context for 'go back'")
-
-        # Rule 9: "Refresh" -> If current_browser exists
-        if re.search(r"\b(refresh|refresh\s+page)\b", normalized):
-            if snapshot.current_browser:
-                self._log_rewrite(command, command, f"Routed to refresh page because current_browser={snapshot.current_browser}")
-                return command, "browser_refresh", dict(entities), None
-            else:
-                self._log_no_rewrite("No active browser context for 'refresh'")
-
-        # Browser Search Results ("open the first result")
-        if re.search(r"\b(open|click|go to)?\s*(the\s+)?first\s+result\b", normalized):
+        # Rule 3: Browser Search Results ("open the first result")
+        if re.search(r"\b(open|click|go to)?\s*(the\s+)?first\s+result\b", raw_lower):
             if snapshot.last_search_query:
                 query = snapshot.last_search_query.lower()
                 resolved_url = "https://www.google.com"
@@ -141,66 +123,89 @@ class ContextResolver:
                 else:
                     resolved_url = f"https://www.{snapshot.last_search_query.lower().replace(' ', '')}.com"
                 
-                resolved_entities = dict(entities)
-                resolved_entities["url"] = resolved_url
-                resolved_cmd = f"open {resolved_url}"
-                self._log_rewrite(command, resolved_cmd, f"Used last_search_query query='{snapshot.last_search_query}'")
-                return resolved_cmd, "open_website", resolved_entities, None
+                resolved.verb = "open"
+                resolved.object = resolved_url
+                resolved.entities["url"] = resolved_url
+                resolved.raw_command = f"open {resolved_url}"
+                self._log_rewrite(parsed.raw_command, resolved.raw_command, f"Used last_search_query query='{snapshot.last_search_query}'")
+                return resolved
 
-        # Context Queries
-        if re.search(r"\b(what\s+did\s+(you|i)\s+(just\s+)?open|what\s+did\s+you\s+open\s+right\s+now)\b", normalized):
-            resolved_entities = dict(entities)
-            resolved_entities["query_type"] = "last_opened_application"
-            return command, "query_context", resolved_entities, None
-
-        if re.search(r"\bwhat\s+(application|app)\s+is\s+open\b", normalized):
-            resolved_entities = dict(entities)
-            resolved_entities["query_type"] = "current_application"
-            return command, "query_context", resolved_entities, None
-
-        if re.search(r"\bwhat\s+(website|site|url|page)\s+(am\s+i\s+on|is\s+this)\b", normalized):
-            resolved_entities = dict(entities)
-            resolved_entities["query_type"] = "current_website"
-            return command, "query_context", resolved_entities, None
-
-        # Rule 1, 2, 3: Close/Closing and Pronoun resolution for close/open app
-        app_name = entities.get("app_name")
-        window_name = entities.get("window_name")
-
-        resolved_entities = dict(entities)
-
-        if intent in {"close_application", "open_application"}:
-            if not app_name or app_name.lower() in {"it", "that", "this", "app", "application", "window"}:
-                resolved_app = resolve_app_from_context(snapshot)
-                if resolved_app:
-                    resolved_entities["app_name"] = resolved_app
-                    resolved_cmd = f"close {resolved_app}" if intent == "close_application" else f"open {resolved_app}"
-                    self._log_rewrite(command, resolved_cmd, f"Used priority resolved app name '{resolved_app}'")
-                    return resolved_cmd, intent, resolved_entities, None
-                elif intent == "close_application":
-                    # Clarification response for empty context close
-                    direct_response = {
+        # Rule 4: Pronoun resolution for close/open/window state
+        clean_obj = normalized_obj.replace("again", "").strip()
+        if clean_obj in {"it", "that", "this", "window", "app", "application", ""}:
+            # Handle empty close clarification
+            if resolved.verb == "close" and clean_obj == "":
+                resolved_target = resolve_app_from_context(snapshot)
+                if not resolved_target:
+                    # No app in context, direct clarification response needed
+                    resolved.direct_response = {
                         "status": "success",
                         "reply": "Which application would you like me to close?",
                         "intent": "close_application",
                         "payload": {"error": "missing_context"}
                     }
-                    self._log_rewrite(command, "Bypassed with Clarification Reply", "No active application in context to close")
-                    return command, intent, entities, direct_response
+                    self._log_rewrite(parsed.raw_command, "Bypassed with Clarification Reply", "No active application in context to close")
+                    return resolved
+            else:
+                resolved_target = None
+                window_verbs = {"focus", "maximize", "minimize", "restore", "close"}
+                if resolved.verb in window_verbs:
+                    resolved_target = resolve_window_from_context(snapshot)
+                else:
+                    resolved_target = resolve_app_from_context(snapshot)
+            
+            if resolved_target:
+                resolved_target = resolved_target.lower()
+                resolved.object = resolved_target
+                if resolved.verb:
+                    resolved.raw_command = f"{resolved.verb} {resolved_target}"
+                
+                # Update app/window entities
+                resolved.entities["app_name"] = resolved_target
+                resolved.entities["window_name"] = resolved_target
+                self._log_rewrite(parsed.raw_command, resolved.raw_command, f"Resolved pronoun to '{resolved_target}'")
+                return resolved
 
-        # Rule 4, 5: Window operations and pronoun resolution
-        elif intent in {"focus_window", "maximize_window", "minimize_window", "restore_window"}:
-            if not window_name or window_name.lower() in {"it", "that", "this", "window", "app", "application"}:
-                resolved_window = resolve_window_from_context(snapshot)
-                if resolved_window:
-                    resolved_entities["window_name"] = resolved_window
-                    action_verb = intent.replace("_window", "")
-                    resolved_cmd = f"{action_verb} {resolved_window}"
-                    self._log_rewrite(command, resolved_cmd, f"Used priority resolved window/app name '{resolved_window}'")
-                    return resolved_cmd, intent, resolved_entities, None
+        # Rule 5: Browser Refresh
+        if resolved.verb == "refresh" or "refresh" in raw_lower:
+            if snapshot.current_browser:
+                resolved.verb = "refresh"
+                resolved.object = "page"
+                resolved.raw_command = "refresh"
+                self._log_rewrite(parsed.raw_command, resolved.raw_command, "Browser refresh matched")
+                return resolved
+
+        # Rule 6: Browser Go Back
+        if (resolved.verb == "go" and clean_obj == "back") or "go back" in raw_lower:
+            if snapshot.current_browser:
+                resolved.verb = "go"
+                resolved.object = "back"
+                resolved.raw_command = "go back"
+                self._log_rewrite(parsed.raw_command, resolved.raw_command, "Browser go back matched")
+                return resolved
+
+        # Rule 7: Context query mappings to conversation queries
+        if "what did you open" in raw_lower or "what did i open" in raw_lower:
+            resolved.verb = "query"
+            resolved.object = "last_opened_application"
+            resolved.entities["query_type"] = "last_opened_application"
+            self._log_rewrite(parsed.raw_command, "Conversation query: last_opened_application", "Context query matched")
+            return resolved
+        elif "what application is open" in raw_lower or "what app is open" in raw_lower:
+            resolved.verb = "query"
+            resolved.object = "current_application"
+            resolved.entities["query_type"] = "current_application"
+            self._log_rewrite(parsed.raw_command, "Conversation query: current_application", "Context query matched")
+            return resolved
+        elif "what website" in raw_lower or "what site" in raw_lower or "what url" in raw_lower:
+            resolved.verb = "query"
+            resolved.object = "current_website"
+            resolved.entities["query_type"] = "current_website"
+            self._log_rewrite(parsed.raw_command, "Conversation query: current_website", "Context query matched")
+            return resolved
 
         self._log_no_rewrite("No matching context rules applied")
-        return command, intent, entities, None
+        return resolved
 
     def _log_rewrite(self, original: str, resolved: str, reason: str) -> None:
         log_str = (
