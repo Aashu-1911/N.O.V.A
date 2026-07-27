@@ -35,6 +35,12 @@ class ExecutionContext:
     mouse_position: Optional[tuple] = None
     keyboard_modifiers: List[str] = field(default_factory=list)
     
+    focused_element: Optional[str] = None
+    focused_control: Optional[str] = None
+    selected_file: Optional[str] = None
+    selected_folder: Optional[str] = None
+    recent_targets: List[str] = field(default_factory=list)
+    
     conversation_state: Dict[str, Any] = field(default_factory=dict)
     active_task: Optional[str] = None
     active_chain: Optional[str] = None
@@ -51,6 +57,31 @@ class ExecutionContext:
     last_window: Optional[str] = None
     last_window_handle: Optional[int] = None
     last_website: Optional[str] = None
+
+    # Properties to map rich fields to backwards-compatible fields
+    @property
+    def clipboard(self) -> Optional[str]:
+        return self.clipboard_text
+
+    @clipboard.setter
+    def clipboard(self, value: Optional[str]) -> None:
+        self.clipboard_text = value
+
+    @property
+    def current_selection(self) -> Optional[str]:
+        return self.selected_text
+
+    @current_selection.setter
+    def current_selection(self, value: Optional[str]) -> None:
+        self.selected_text = value
+
+    @property
+    def current_tab(self) -> Optional[str]:
+        return self.current_browser_tab
+
+    @current_tab.setter
+    def current_tab(self, value: Optional[str]) -> None:
+        self.current_browser_tab = value
 
     def snapshot(self) -> ExecutionContext:
         """Return an immutable snapshot copy of this context."""
@@ -79,6 +110,14 @@ class ExecutionContext:
             "selected_text": self.selected_text,
             "mouse_position": self.mouse_position,
             "keyboard_modifiers": self.keyboard_modifiers,
+            "focused_element": self.focused_element,
+            "focused_control": self.focused_control,
+            "selected_file": self.selected_file,
+            "selected_folder": self.selected_folder,
+            "clipboard": self.clipboard,
+            "current_tab": self.current_tab,
+            "current_selection": self.current_selection,
+            "recent_targets": self.recent_targets,
             "conversation_state": self.conversation_state,
             "active_task": self.active_task,
             "active_chain": self.active_chain,
@@ -106,17 +145,22 @@ class ExecutionContext:
             current_application=d.get("current_application"),
             current_window=d.get("current_window"),
             current_browser=d.get("current_browser"),
-            current_browser_tab=d.get("current_browser_tab"),
+            current_browser_tab=d.get("current_browser_tab") or d.get("current_tab"),
             current_url=d.get("current_url"),
             last_search_query=d.get("last_search_query"),
             last_opened_application=d.get("last_opened_application"),
             last_closed_application=d.get("last_closed_application"),
             last_window_operation=d.get("last_window_operation"),
             last_volume_action=d.get("last_volume_action"),
-            clipboard_text=d.get("clipboard_text"),
-            selected_text=d.get("selected_text"),
+            clipboard_text=d.get("clipboard_text") or d.get("clipboard"),
+            selected_text=d.get("selected_text") or d.get("current_selection"),
             mouse_position=d.get("mouse_position"),
             keyboard_modifiers=d.get("keyboard_modifiers", []),
+            focused_element=d.get("focused_element"),
+            focused_control=d.get("focused_control"),
+            selected_file=d.get("selected_file"),
+            selected_folder=d.get("selected_folder"),
+            recent_targets=d.get("recent_targets", []),
             conversation_state=d.get("conversation_state", {}),
             active_task=d.get("active_task"),
             active_chain=d.get("active_chain"),

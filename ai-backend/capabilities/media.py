@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from capabilities.base import BaseCapability, ParsedCommand
+from capabilities.base import BaseCapability, ParsedCommand, ReferenceWrapper
 from capabilities.response import CapabilityResponse
 from handlers.media_handler import handle_play_music, handle_media_control
 
@@ -43,19 +43,23 @@ class MediaCapability(BaseCapability):
         return True
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
+        target_name = parsed.object
+        if isinstance(parsed.target, ReferenceWrapper):
+            target_name = parsed.target.value
+
         entities = dict(parsed.entities)
         
         # Determine intent to map to handlers
         intent = "media_control"
         if parsed.verb == "play":
             intent = "play_music"
-            if not entities.get("media_query") and parsed.object:
-                entities["media_query"] = parsed.object
+            if not entities.get("media_query") and target_name:
+                entities["media_query"] = target_name
         else:
             if not entities.get("media_action"):
                 entities["media_action"] = parsed.verb
 
-        interpretation = f"Media action: '{parsed.verb}' on query '{parsed.object}'"
+        interpretation = f"Media action: '{parsed.verb}' on query '{target_name or parsed.object}'"
 
         if intent == "play_music":
             res = handle_play_music(entities, context)

@@ -1,7 +1,13 @@
 from typing import Any, Dict, List
-from capabilities.base import BaseCapability, ParsedCommand
+from capabilities.base import (
+    BaseCapability, ParsedCommand, WindowReference, ApplicationReference,
+    BrowserReference, ReferenceWrapper
+)
 from capabilities.response import CapabilityResponse
-from handlers.window_handler import handle_focus_window, handle_maximize_window, handle_minimize_window, handle_restore_window
+from handlers.window_handler import (
+    handle_focus_window, handle_maximize_window, handle_minimize_window, 
+    handle_restore_window, handle_toggle_minimize, handle_move_window, handle_resize_window
+)
 from handlers.app_handler import handle_open_application, handle_close_application
 
 class WindowCapability(BaseCapability):
@@ -16,21 +22,19 @@ class WindowCapability(BaseCapability):
 
     @property
     def supported_verbs(self) -> List[str]:
-        return ["open", "close", "focus", "maximize", "minimize", "restore", "list"]
+        return ["open", "close", "focus", "maximize", "minimize", "restore", "list", "toggle_minimize", "move", "resize"]
 
     @property
     def supported_objects(self) -> List[str]:
-        return ["application", "window", "app", "it", "notepad", "calculator", "chrome", "telegram"]
+        return ["application", "window", "app", "notepad", "calculator", "chrome", "telegram"]
 
     def confidence(self, parsed: ParsedCommand, context: Dict[str, Any]) -> float:
-        obj_lower = (parsed.object or "").lower()
-
-        # Window/App management commands
         if parsed.verb in self.supported_verbs:
-            # Avoid web URLs, which go to Browser
+            if isinstance(parsed.target, BrowserReference) and parsed.verb == "open":
+                return 0.0
+            obj_lower = (parsed.object or "").lower()
             if parsed.verb == "open" and ("." in obj_lower or "http" in obj_lower):
                 return 0.0
-            # Only handle list if targeting windows or apps
             if parsed.verb == "list" and "window" not in obj_lower and "app" not in obj_lower:
                 return 0.0
             return 1.0
@@ -41,23 +45,26 @@ class WindowCapability(BaseCapability):
         return True
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
-        # Interpreter mappings (do not map raw pronouns to names if unresolved)
-        obj_clean = (parsed.object or "").strip()
-        is_pronoun = obj_clean.lower() in {"it", "that", "this", "window", "app", "application", ""}
+        target_name = None
+        if isinstance(parsed.target, WindowReference):
+            target_name = parsed.target.window_name
+        elif isinstance(parsed.target, ApplicationReference):
+            target_name = parsed.target.app_name
+        elif isinstance(parsed.target, ReferenceWrapper):
+            target_name = parsed.target.value
         
         entities = dict(parsed.entities)
-        if not is_pronoun:
-            if not entities.get("app_name"):
-                entities["app_name"] = obj_clean
-            if not entities.get("window_name"):
-                entities["window_name"] = obj_clean
+        if target_name:
+            target_name_clean = target_name.lower()
+            entities["app_name"] = target_name_clean
+            entities["window_name"] = target_name_clean
         else:
             if "app_name" not in entities:
                 entities["app_name"] = None
             if "window_name" not in entities:
                 entities["window_name"] = None
 
-        interpretation = f"Window action: '{parsed.verb}' on application/window '{parsed.object}'"
+        interpretation = f"Window action: '{parsed.verb}' on application/window '{target_name or parsed.object}'"
         context_updates = {}
         verification_result = False
 
@@ -123,6 +130,23 @@ class WindowCapability(BaseCapability):
                     "last_window": payload.get("window_title") or entities.get("window_name"),
                     "last_window_handle": payload.get("window_handle")
                 }
+        elif parsed.verb == "toggle_minimize":
+            res = handle_toggle_minimize(entities, context)
+            verification_result = (res.get("status") == "success")
+            if verification_result:
+                payload = res.get("payload") or {}
+                context_updates = {
+                    "last_window_operation": "toggle_minimize",
+                    "current_window": payload.get("window_title") or entities.get("window_name"),
+                    "last_window": payload.get("window_title") or entities.get("window_name"),
+                    "last_window_handle": payload.get("window_handle")
+                }
+        elif parsed.verb == "move":
+            res = handle_move_window(entities, context)
+            verification_result = (res.get("status") == "success")
+        elif parsed.verb == "resize":
+            res = handle_resize_window(entities, context)
+            verification_result = (res.get("status") == "success")
         else:
             res = {"status": "error", "reply": "Unsupported window management action."}
 

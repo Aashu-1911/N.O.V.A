@@ -1,6 +1,12 @@
 import re
 from typing import Any, Dict, Optional
-from capabilities.base import ParsedCommand
+from capabilities.base import (
+    ParsedCommand, Reference, ReferenceWrapper, PronounReference,
+    WindowReference, ApplicationReference, BrowserReference, UIElementReference,
+    VisionTarget, OCRTarget, FileReference, ClipboardReference,
+    SelectionReference, CursorReference, TextBoxReference, PreviousWindowReference,
+    TemporalReference, FocusedReference, LocationReference, NeedsClarification
+)
 
 class CommandParser:
     """Lightweight, capability-agnostic semantic parser for user commands."""
@@ -83,6 +89,19 @@ class CommandParser:
                 obj_lower = obj_lower[len(article):]
                 break
 
+        # Strip trailing/surrounding punctuation, quotes, and parentheses
+        obj_clean = obj_clean.strip()
+        obj_clean = re.sub(r'[.,!?\s]+$', '', obj_clean)
+        # Strip surrounding quotes
+        if (obj_clean.startswith('"') and obj_clean.endswith('"')) or (obj_clean.startswith("'") and obj_clean.endswith("'")):
+            obj_clean = obj_clean[1:-1]
+        obj_clean = obj_clean.strip()
+        # Strip surrounding parentheses
+        if obj_clean.startswith('(') and obj_clean.endswith(')'):
+            obj_clean = obj_clean[1:-1]
+        obj_clean = obj_clean.strip()
+        obj_lower = obj_clean.lower()
+
         # 4. Resolve scope
         scope = None
         ui_indicators = {"button", "textbox", "label", "checkbox", "control", "item", "popup"}
@@ -90,7 +109,47 @@ class CommandParser:
             if any(ind in obj_lower for ind in ui_indicators):
                 scope = "current application"
 
-        # 5. Populate standard entity fields dynamically based on semantic category
+        # 5. Determine semantic target Reference class
+        target = None
+        if verb == "do" and obj_lower in {"it", "it again"}:
+            target = TemporalReference("do it again")
+        elif obj_lower in {"it", "this", "that", "those", "these", "it again", "this again", "that again"}:
+            target = PronounReference(obj_lower)
+        elif "previous window" in obj_lower or "last window" in obj_lower:
+            target = PreviousWindowReference()
+        elif obj_lower in {"again", "repeat that", "repeat", "last command", "do it again", "do it"}:
+            target = TemporalReference(obj_lower)
+        elif any(f in obj_lower for f in ["focused", "selected", "active", "current"]):
+            target = FocusedReference(obj_lower)
+        elif any(loc in obj_lower for loc in ["here", "there", "under cursor"]):
+            target = LocationReference(obj_lower)
+        elif verb in {"click", "type", "focus", "select", "toggle"} and any(ind in obj_lower for ind in ui_indicators):
+            target = UIElementReference(obj_clean)
+        elif "." in obj_clean and not obj_clean.startswith(("http", "www")):
+            target = FileReference(obj_clean)
+        else:
+            if obj_clean == "":
+                if verb == "close":
+                    target = PronounReference("")
+                else:
+                    target = None
+            elif verb == "type":
+                target = None
+            elif verb in {"open", "close"}:
+                if obj_lower in {"browser", "firefox", "edge"}:
+                    target = BrowserReference(obj_clean)
+                elif obj_lower in {"chrome", "notepad", "calculator", "telegram", "vs code", "vscode"}:
+                    target = WindowReference(obj_clean)
+                else:
+                    target = ApplicationReference(obj_clean)
+            elif verb in {"focus", "maximize", "minimize", "restore"}:
+                target = WindowReference(obj_clean)
+            elif verb in {"click", "find"}:
+                target = UIElementReference(obj_clean)
+            else:
+                target = ReferenceWrapper(obj_clean)
+
+        # 6. Populate standard entity fields dynamically based on semantic category
         if verb == "open" or verb == "close":
             entities["app_name"] = obj_clean
             entities["window_name"] = obj_clean
@@ -102,7 +161,6 @@ class CommandParser:
         elif verb == "click" or verb == "find":
             entities["control_name"] = obj_clean
         elif verb == "type":
-            # E.g. "type hello" -> type is verb, hello is object/text
             entities["text"] = obj_clean
         elif verb in {"increase", "decrease"}:
             if "volume" in obj_lower:
@@ -120,7 +178,6 @@ class CommandParser:
                     entities["title"] = obj_clean[title_match.start(1):]
                     entities["task_name"] = entities["title"]
             if verb == "complete":
-                # E.g. "complete task 5"
                 id_match = re.search(r"\b(?:task\s+)?(\d+)$", obj_clean)
                 if id_match:
                     entities["task_id"] = int(id_match.group(1))
@@ -128,7 +185,7 @@ class CommandParser:
         return ParsedCommand(
             raw_command=command,
             verb=verb,
-            object=obj_clean,
+            target=target,
             scope=scope,
             entities=entities
         )

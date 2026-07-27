@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from capabilities.base import BaseCapability, ParsedCommand
+from capabilities.base import BaseCapability, ParsedCommand, ReferenceWrapper
 from capabilities.response import CapabilityResponse
 from handlers.chat_handler import handle_general_chat
 
@@ -33,7 +33,6 @@ class GeneralLLMCapability(BaseCapability):
         # Exception: "read text" from image goes to OCR, "read popup" goes to Vision.
         # But general conversation might have "read" or "describe". If combined with UI elements or screen, exclude.
         if words.intersection(ui_screen_keywords):
-            # Check if it contains general questions like "how to read a file" vs "read screen"
             if "screen" in words or "button" in words or "textbox" in words or "popup" in words or "controls" in words:
                 return 0.0
             if "click" in words or "locate" in words:
@@ -94,11 +93,15 @@ class ClipboardCapability(BaseCapability):
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
         import pyperclip
+        target_name = parsed.object
+        if isinstance(parsed.target, ReferenceWrapper):
+            target_name = parsed.target.value
+
         interpretation = f"Clipboard action: '{parsed.verb}'"
         context_updates = {}
         
         if parsed.verb in {"copy", "clipboard_copy"}:
-            text_to_copy = parsed.entities.get("text", parsed.object)
+            text_to_copy = parsed.entities.get("text", target_name)
             pyperclip.copy(text_to_copy)
             reply = "Copied to clipboard."
             context_updates = {"clipboard": text_to_copy}
@@ -141,7 +144,6 @@ class SystemCapability(BaseCapability):
         return ["pc", "computer", "screen", "screenshot", "reminder"]
 
     def confidence(self, parsed: ParsedCommand, context: Dict[str, Any]) -> float:
-        obj_lower = (parsed.object or "").lower()
         if parsed.verb in self.supported_verbs:
             return 1.0
         if "lock" in parsed.raw_command.lower() and "pc" in parsed.raw_command.lower():
@@ -219,23 +221,27 @@ class TaskManagementCapability(BaseCapability):
             handle_add_task, handle_show_tasks, handle_complete_task,
             handle_show_stats, handle_update_task
         )
+        target_name = parsed.object
+        if isinstance(parsed.target, ReferenceWrapper):
+            target_name = parsed.target.value
+
         entities = dict(parsed.entities)
         # Handle entities mapping if missing
-        if not entities.get("title") and parsed.verb == "add":
-            entities["title"] = parsed.object.replace("task", "").strip()
-        if not entities.get("task_id") and parsed.verb == "complete":
+        if not entities.get("title") and parsed.verb == "add" and target_name:
+            entities["title"] = target_name.replace("task", "").strip()
+        if not entities.get("task_id") and parsed.verb == "complete" and target_name:
             try:
-                entities["task_id"] = int(parsed.object.replace("task", "").strip())
+                entities["task_id"] = int(target_name.replace("task", "").strip())
             except ValueError:
                 pass
 
-        interpretation = f"Task action: '{parsed.verb}' with target '{parsed.object}'"
+        interpretation = f"Task action: '{parsed.verb}' with target '{target_name or parsed.object}'"
 
         if parsed.verb == "add":
             res = handle_add_task(entities, context)
             verification_result = (res.get("status") == "success")
         elif parsed.verb in {"show", "list"}:
-            if "stat" in parsed.object.lower():
+            if target_name and "stat" in target_name.lower():
                 res = handle_show_stats(entities, context)
             else:
                 res = handle_show_tasks(entities, context)

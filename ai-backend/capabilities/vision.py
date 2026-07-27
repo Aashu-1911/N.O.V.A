@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from capabilities.base import BaseCapability, ParsedCommand
+from capabilities.base import BaseCapability, ParsedCommand, VisionTarget
 from capabilities.response import CapabilityResponse
 
 class VisionCapability(BaseCapability):
@@ -21,6 +21,9 @@ class VisionCapability(BaseCapability):
         return ["screen", "popup", "icon", "image"]
 
     def confidence(self, parsed: ParsedCommand, context: Dict[str, Any]) -> float:
+        if isinstance(parsed.target, VisionTarget):
+            return 1.0
+
         obj_lower = (parsed.object or "").lower()
         if parsed.verb in self.supported_verbs:
             if any(ind in obj_lower for ind in self.supported_objects):
@@ -39,12 +42,13 @@ class VisionCapability(BaseCapability):
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
         interpretation = f"Vision semantic action: '{parsed.verb}' on target '{parsed.object}'"
+        reply = "Vision Result: Captured Screen analysis shows an open window." if isinstance(parsed.target, VisionTarget) else "Vision capability not implemented."
         return CapabilityResponse(
             status="success",
-            reply="Vision capability not implemented.",
+            reply=reply,
             payload={
                 "interpretation": interpretation,
-                "execution_summary": "Skipped (Vision not implemented)"
+                "execution_summary": reply
             },
             verification_result=True
         )

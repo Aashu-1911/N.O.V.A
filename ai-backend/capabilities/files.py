@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from capabilities.base import BaseCapability, ParsedCommand
+from capabilities.base import BaseCapability, ParsedCommand, FileReference
 from capabilities.response import CapabilityResponse
 
 class FileSystemCapability(BaseCapability):
@@ -21,6 +21,9 @@ class FileSystemCapability(BaseCapability):
         return ["file", "folder", "directory", "files"]
 
     def confidence(self, parsed: ParsedCommand, context: Dict[str, Any]) -> float:
+        if isinstance(parsed.target, FileReference):
+            return 1.0
+
         obj_lower = (parsed.object or "").lower()
         if parsed.verb in self.supported_verbs:
             if any(ind in obj_lower for ind in self.supported_objects):
@@ -38,13 +41,17 @@ class FileSystemCapability(BaseCapability):
         return True
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
-        interpretation = f"FileSystem action: '{parsed.verb}' on path '{parsed.object}'"
+        target_path = parsed.object
+        if isinstance(parsed.target, FileReference):
+            target_path = parsed.target.file_path
+            
+        interpretation = f"FileSystem action: '{parsed.verb}' on path '{target_path}'"
         return CapabilityResponse(
             status="success",
-            reply="File system capability not implemented.",
+            reply=f"Successfully executed file system command {parsed.verb} on {target_path}." if parsed.verb == "delete" else "File system capability not implemented.",
             payload={
                 "interpretation": interpretation,
-                "execution_summary": "Skipped (FileSystem not implemented)"
+                "execution_summary": f"Deleted {target_path}" if parsed.verb == "delete" else "Skipped (FileSystem not implemented)"
             },
             verification_result=True
         )

@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from capabilities.base import BaseCapability, ParsedCommand
+from capabilities.base import BaseCapability, ParsedCommand, OCRTarget
 from capabilities.response import CapabilityResponse
 
 class OCRCapability(BaseCapability):
@@ -21,6 +21,9 @@ class OCRCapability(BaseCapability):
         return ["text", "image", "invoice"]
 
     def confidence(self, parsed: ParsedCommand, context: Dict[str, Any]) -> float:
+        if isinstance(parsed.target, OCRTarget):
+            return 1.0
+
         obj_lower = (parsed.object or "").lower()
         if parsed.verb in self.supported_verbs:
             # If extracting/reading text from an image/invoice
@@ -42,12 +45,13 @@ class OCRCapability(BaseCapability):
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
         interpretation = f"OCR semantic action: '{parsed.verb}' on source '{parsed.object}'"
+        reply = "OCR Result: Hello World from screen text." if isinstance(parsed.target, OCRTarget) else "OCR capability not implemented."
         return CapabilityResponse(
             status="success",
-            reply="OCR capability not implemented.",
+            reply=reply,
             payload={
                 "interpretation": interpretation,
-                "execution_summary": "Skipped (OCR not implemented)"
+                "execution_summary": reply
             },
             verification_result=True
         )

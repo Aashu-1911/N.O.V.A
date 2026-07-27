@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from capabilities.base import BaseCapability, ParsedCommand
+from capabilities.base import BaseCapability, ParsedCommand, ReferenceWrapper
 from capabilities.response import CapabilityResponse
 from handlers.query_handler import handle_query_context
 
@@ -40,11 +40,15 @@ class ConversationCapability(BaseCapability):
         return True
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
+        target_name = parsed.object
+        if isinstance(parsed.target, ReferenceWrapper):
+            target_name = parsed.target.value
+
         entities = dict(parsed.entities)
         
         # Populate query type
         if not entities.get("query_type"):
-            entities["query_type"] = parsed.object
+            entities["query_type"] = target_name
 
         interpretation = f"Conversation Context query: '{entities.get('query_type')}'"
         res = handle_query_context(entities, context)

@@ -229,6 +229,28 @@ def execute_single(
         
         resolved_cmd = resolver.resolve(parsed_cmd, snapshot)
 
+        # If resolver generated a NeedsClarification target
+        from capabilities.base import NeedsClarification
+        if isinstance(resolved_cmd.target, NeedsClarification):
+            status = "success" if resolved_cmd.verb in {"open", "close"} else "error"
+            response = {
+                "status": status,
+                "reply": resolved_cmd.target.reply,
+                "intent": get_legacy_intent_name("CapabilityRouter", resolved_cmd.verb, resolved_cmd.object),
+                "payload": {"error": "missing_context"}
+            }
+            if context_manager:
+                execution_time = time.time() - t0
+                if status == "error":
+                    context_manager.update_from_failure(
+                        resolved_cmd.raw_command, response, execution_time, parent_command=parent_command
+                    )
+                else:
+                    context_manager.update_from_execution(
+                        resolved_cmd.raw_command, response, execution_time, parent_command=parent_command
+                    )
+            return response
+
         # If resolver generated a direct clarification response
         if resolved_cmd.direct_response is not None:
             response = resolved_cmd.direct_response

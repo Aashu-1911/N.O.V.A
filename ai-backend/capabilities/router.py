@@ -1,7 +1,7 @@
 import time
 import logging
 from typing import Any, Dict, List, Optional, Tuple
-from capabilities.base import ParsedCommand, BaseCapability
+from capabilities.base import ParsedCommand, ResolvedCommand, BaseCapability
 from capabilities.response import CapabilityResponse
 from capabilities.registry import get_registered_capabilities
 
@@ -33,16 +33,18 @@ class CapabilityRouter:
 
     def route_and_dispatch(
         self,
-        parsed_cmd: ParsedCommand,
-        context: Dict[str, Any]
+        resolved_cmd: ResolvedCommand,
+        context: Dict[str, Any],
+        original_parsed: Optional[ParsedCommand] = None
     ) -> CapabilityResponse:
         """Orchestrates the routing, health check, execution, verification, and logging of a request."""
         t0 = time.time()
+        parsed_cmd = original_parsed or resolved_cmd
         
         # 1. Calculate matching confidences
         candidates_raw = []
         for cap in get_registered_capabilities():
-            conf = cap.confidence(parsed_cmd, context)
+            conf = cap.confidence(resolved_cmd, context)
             if conf > 0.0:
                 candidates_raw.append((cap, conf))
                 
@@ -56,9 +58,9 @@ class CapabilityRouter:
                 reply="I'm sorry, I don't know how to handle that request.",
                 handled_by="CapabilityRouter",
                 execution_time=duration,
-                errors=["No capable module matched the parsed command."]
+                errors=["No capable module matched the resolved command."]
             )
-            self._log_pipeline(parsed_cmd.raw_command, parsed_cmd, parsed_cmd, candidates_log, "None", "N/A", "N/A", "N/A", {}, res)
+            self._log_pipeline(resolved_cmd.raw_command, parsed_cmd, resolved_cmd, candidates_log, "None", "N/A", "N/A", "N/A", {}, res)
             return res
             
         # Sort candidates
@@ -77,7 +79,7 @@ class CapabilityRouter:
                     execution_time=duration,
                     errors=["Tied capabilities matching the command."]
                 )
-                self._log_pipeline(parsed_cmd.raw_command, parsed_cmd, parsed_cmd, candidates_log, "None (Tie)", "N/A", "N/A", "N/A", {}, res)
+                self._log_pipeline(resolved_cmd.raw_command, parsed_cmd, resolved_cmd, candidates_log, "None (Tie)", "N/A", "N/A", "N/A", {}, res)
                 return res
 
         # Case C: Selected capability is not healthy
@@ -90,12 +92,12 @@ class CapabilityRouter:
                 execution_time=duration,
                 errors=["Capability health check failed."]
             )
-            self._log_pipeline(parsed_cmd.raw_command, parsed_cmd, parsed_cmd, candidates_log, best_cap.name, "N/A", "N/A", "N/A", {}, res)
+            self._log_pipeline(resolved_cmd.raw_command, parsed_cmd, resolved_cmd, candidates_log, best_cap.name, "N/A", "N/A", "N/A", {}, res)
             return res
 
         # 2. Dispatch execution
         try:
-            response = best_cap.execute(parsed_cmd, context)
+            response = best_cap.execute(resolved_cmd, context)
             duration = (time.time() - t0) * 1000
             response.execution_time = duration
             response.handled_by = best_cap.name
@@ -106,9 +108,9 @@ class CapabilityRouter:
                 ver_text = "Verified Successful" if response.verification_result else "Verification Failed"
 
             self._log_pipeline(
-                original_cmd=parsed_cmd.raw_command,
+                original_cmd=resolved_cmd.raw_command,
                 parsed_cmd=parsed_cmd,
-                resolved_cmd=parsed_cmd,
+                resolved_cmd=resolved_cmd,
                 candidates=candidates_log,
                 selected=best_cap.name,
                 interpreter_output=response.payload.get("interpretation", "Success"),
@@ -128,14 +130,14 @@ class CapabilityRouter:
                 execution_time=duration,
                 errors=[str(e)]
             )
-            self._log_pipeline(parsed_cmd.raw_command, parsed_cmd, parsed_cmd, candidates_log, best_cap.name, "Error", "Failed", "N/A", {}, res)
+            self._log_pipeline(resolved_cmd.raw_command, parsed_cmd, resolved_cmd, candidates_log, best_cap.name, "Error", "Failed", "N/A", {}, res)
             return res
 
     def _log_pipeline(
         self,
         original_cmd: str,
         parsed_cmd: ParsedCommand,
-        resolved_cmd: ParsedCommand,
+        resolved_cmd: ResolvedCommand,
         candidates: List[Tuple[str, float]],
         selected: str,
         interpreter_output: Any,

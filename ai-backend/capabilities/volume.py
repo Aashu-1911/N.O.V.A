@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from capabilities.base import BaseCapability, ParsedCommand
+from capabilities.base import BaseCapability, ParsedCommand, ReferenceWrapper
 from capabilities.response import CapabilityResponse
 from handlers.system_handler import handle_volume_control
 
@@ -41,6 +41,10 @@ class VolumeCapability(BaseCapability):
         return True
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
+        target_name = parsed.object
+        if isinstance(parsed.target, ReferenceWrapper):
+            target_name = parsed.target.value
+
         entities = dict(parsed.entities)
         
         # Populate volume action if missing
@@ -50,12 +54,12 @@ class VolumeCapability(BaseCapability):
             elif parsed.verb == "decrease":
                 entities["volume_action"] = "down"
             elif parsed.verb == "volume":
-                if "up" in parsed.object.lower():
+                if target_name and "up" in target_name.lower():
                     entities["volume_action"] = "up"
-                elif "down" in parsed.object.lower():
+                elif target_name and "down" in target_name.lower():
                     entities["volume_action"] = "down"
                 else:
-                    entities["volume_action"] = parsed.object
+                    entities["volume_action"] = target_name
             else:
                 entities["volume_action"] = parsed.verb
 

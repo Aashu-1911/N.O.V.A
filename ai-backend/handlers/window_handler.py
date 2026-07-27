@@ -1,6 +1,6 @@
 """
 Window handlers — business logic for focus, maximize, minimize, restore,
-list, and get-active-window intents.
+list, get-active-window, close, move, resize, and toggle-minimize intents.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ _VERB_PAST = {
     "maximize": "Maximized",
     "minimize": "Minimized",
     "restore": "Restored",
+    "close": "Closed",
+    "toggle minimize": "Toggled minimize on",
 }
 
 
@@ -46,10 +48,11 @@ def _execute_window_action(
         result = manager_fn(name)
 
         if not result.success:
+            err_code = result.error_code or "UNKNOWN_ERROR"
             reason = (result.reason or "").lower()
-            if "not found" in reason:
-                return error(f"Window '{name}' was not found.")
-            return error(f"Unable to {action_name} window.")
+            if err_code == "WINDOW_NOT_FOUND" or "not found" in reason:
+                return error(f"Window '{name}' was not found.", payload={"error_code": err_code})
+            return error(f"Unable to {action_name} window.", payload={"error_code": err_code})
 
         verb = _VERB_PAST.get(action_name, action_name.capitalize() + "d")
         return success(
@@ -109,6 +112,84 @@ def handle_restore_window(
         entities.get("window_name"),
         context,
     )
+
+
+def handle_close_window(
+    entities: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    return _execute_window_action(
+        "close",
+        window_manager.close_window,
+        entities.get("window_name"),
+        context,
+    )
+
+
+def handle_toggle_minimize(
+    entities: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    return _execute_window_action(
+        "toggle minimize",
+        window_manager.toggle_minimize,
+        entities.get("window_name"),
+        context,
+    )
+
+
+def handle_move_window(
+    entities: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    x = int(entities.get("x", 100))
+    y = int(entities.get("y", 100))
+    width = int(entities.get("width", 800))
+    height = int(entities.get("height", 600))
+    name = _resolve_window(entities.get("window_name"), context)
+    
+    if not name:
+        return error("No window name provided.")
+        
+    try:
+        res = window_manager.move_window(name, x, y, width, height)
+        if not res.success:
+            return error("Unable to move window.", payload={"error_code": res.error_code})
+        return success(
+            f"Moved {res.matched_title}.",
+            payload={
+                "window_title": res.matched_title,
+                "window_handle": res.handle,
+            },
+        )
+    except Exception:
+        return error("Unable to move window.")
+
+
+def handle_resize_window(
+    entities: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> ResponseDict:
+    width = int(entities.get("width", 800))
+    height = int(entities.get("height", 600))
+    name = _resolve_window(entities.get("window_name"), context)
+    
+    if not name:
+        return error("No window name provided.")
+        
+    try:
+        res = window_manager.resize_window(name, width, height)
+        if not res.success:
+            return error("Unable to resize window.", payload={"error_code": res.error_code})
+        return success(
+            f"Resized {res.matched_title}.",
+            payload={
+                "window_title": res.matched_title,
+                "window_handle": res.handle,
+            },
+        )
+    except Exception:
+        return error("Unable to resize window.")
 
 
 def handle_list_windows(

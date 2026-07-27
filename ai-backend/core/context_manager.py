@@ -92,6 +92,17 @@ class ExecutionContextManager:
             self._context.last_error = None
             self._context.execution_timestamp = time.time()
 
+            # Track recent targets automatically
+            target_val = entities.get("app_name") or entities.get("window_name") or entities.get("url") or entities.get("search_query") or entities.get("title") or entities.get("control_name") or entities.get("source")
+            if target_val:
+                if not self._context.recent_targets:
+                    self._context.recent_targets = []
+                if target_val in self._context.recent_targets:
+                    self._context.recent_targets.remove(target_val)
+                self._context.recent_targets.append(target_val)
+                if len(self._context.recent_targets) > 10:
+                    self._context.recent_targets.pop(0)
+
             # Apply explicit context updates if supplied (new capability model)
             if context_updates is not None:
                 for k, v in context_updates.items():

@@ -1,7 +1,13 @@
 from typing import Any, Dict, Tuple, Optional
 import re
 from core.execution_context import ExecutionContext
-from capabilities.base import ParsedCommand
+from capabilities.base import (
+    ParsedCommand, ResolvedCommand, Reference, ReferenceWrapper, PronounReference,
+    WindowReference, ApplicationReference, BrowserReference, UIElementReference,
+    VisionTarget, OCRTarget, FileReference, ClipboardReference,
+    SelectionReference, CursorReference, TextBoxReference, PreviousWindowReference,
+    TemporalReference, FocusedReference, LocationReference, NeedsClarification
+)
 from capabilities.parser import CommandParser
 
 def normalize_command_verbs(command: str) -> str:
@@ -56,63 +62,143 @@ def resolve_window_from_context(snapshot: ExecutionContext) -> Optional[str]:
                 return win
     return None
 
+def deduce_reference_type(target_str: str, snapshot: ExecutionContext) -> Reference:
+    """Deduces a concrete Reference class from a string value."""
+    target_lower = target_str.lower()
+    if "." in target_lower and not target_lower.startswith(("http", "www")):
+        return FileReference(target_str)
+    if target_lower in {"chrome", "browser", "firefox", "edge"}:
+        return BrowserReference(target_str)
+    if target_lower in {"notepad", "calculator", "telegram", "vs code", "vscode"}:
+        return WindowReference(target_str)
+    return ApplicationReference(target_str)
+
+def resolve_pronoun_reference(verb: str, pronoun: str, snapshot: ExecutionContext) -> Reference:
+    """Resolves a PronounReference using target priority checks."""
+    # 1. Focused object/element
+    if snapshot.focused_element:
+        return UIElementReference(snapshot.focused_element)
+    if snapshot.focused_control:
+        return UIElementReference(snapshot.focused_control)
+        
+    # 2. Current window or last window
+    window_target = snapshot.current_window or snapshot.last_window or snapshot.last_opened_application
+    if window_target:
+        return WindowReference(window_target)
+        
+    # 3. Current application or last application
+    app_target = snapshot.current_application or snapshot.last_app or snapshot.last_opened_application
+    if app_target:
+        return ApplicationReference(app_target)
+        
+    # 4. Current browser or last website
+    browser_target = snapshot.current_browser or snapshot.last_website
+    if browser_target:
+        return BrowserReference(browser_target)
+        
+    # 5. Selected file / folder
+    if snapshot.selected_file:
+        return FileReference(snapshot.selected_file)
+    if snapshot.selected_folder:
+        return FileReference(snapshot.selected_folder)
+        
+    # 6. Previous command target (recent targets)
+    if snapshot.recent_targets:
+        return deduce_reference_type(snapshot.recent_targets[-1], snapshot)
+        
+    # 7. Conversation history
+    if snapshot.history:
+        for entry in reversed(snapshot.history):
+            app = entry.get("entities", {}).get("app_name")
+            if app:
+                return ApplicationReference(app)
+            win = entry.get("entities", {}).get("window_name")
+            if win:
+                return WindowReference(win)
+                
+    # If ambiguity remains, clarify
+    if verb == "close":
+        return NeedsClarification("Which application would you like me to close?")
+    if verb == "open":
+        return NeedsClarification("Which application would you like me to open?")
+    if verb in {"maximize", "minimize", "restore", "focus"}:
+        return NeedsClarification("No window name provided.")
+    return NeedsClarification(f"Which target would you like me to {verb}?")
+
 class ContextResolver:
-    """Resolves referring expressions (pronouns like 'it', 'that', or repeat triggers 'again')
-    using state snapshot stored in the Execution Context before routing.
-    """
+    """Resolves referring expressions using rich Execution Context before routing."""
+
     def resolve(
         self,
         parsed: ParsedCommand,
         snapshot: ExecutionContext,
-    ) -> ParsedCommand:
-        """Resolves pronouns, repeat triggers, or context questions based on context snapshot.
+    ) -> ResolvedCommand:
+        """Resolves pronouns, repeat triggers, or focus keywords based on context snapshot.
         
         Returns:
-            Resolved ParsedCommand
+            ResolvedCommand
         """
-        resolved = ParsedCommand(
+        resolved = ResolvedCommand(
             raw_command=parsed.raw_command,
             verb=parsed.verb,
-            object=parsed.object,
+            target=parsed.target,
             scope=parsed.scope,
-            entities=dict(parsed.entities)
+            entities=dict(parsed.entities),
+            direct_response=parsed.direct_response
         )
-        
+
         raw_lower = parsed.raw_command.lower()
-        normalized_obj = (resolved.object or "").strip().lower()
 
-        # Rule 1: Repeat command if "again", "repeat", "do it again" is detected
-        if re.search(r"\b(again|repeat|repeat\s+that|do\s+it\s+again|last\s+command)\b", raw_lower):
-            # Special check for "search again", which is Rule 2
-            if resolved.verb == "search" and normalized_obj == "again":
-                pass
-            # Special check for "open it again", which is Rule 3
-            elif resolved.verb == "open" and normalized_obj == "it again":
-                pass
+        # Helper to log resolution step
+        def log_step(target_type: str, resolved_to: Any, confidence: float):
+            log_str = (
+                "\n========================\n"
+                "Context Resolver Step\n"
+                f"Parsed Target: {target_type}\n"
+                f"Resolved Target: {resolved_to}\n"
+                f"Confidence: {confidence}\n"
+                "========================\n"
+            )
+            import logging
+            logging.getLogger(__name__).info(log_str)
+            print(log_str, flush=True)
+
+        # 1. Temporal Reference ("again", "repeat", "do it again")
+        if isinstance(resolved.target, TemporalReference):
+            keyword = resolved.target.keyword
+            # Special case: "search again"
+            if resolved.verb == "search" and "again" in keyword:
+                if snapshot.last_search_query:
+                    resolved.target = ReferenceWrapper(snapshot.last_search_query)
+                    resolved.entities["search_query"] = snapshot.last_search_query
+                    resolved.raw_command = f"search {snapshot.last_search_query}"
+                    log_step("TemporalReference(again)", f"ReferenceWrapper({snapshot.last_search_query})", 1.0)
+                else:
+                    resolved.target = NeedsClarification("What query would you like me to search?")
+                    log_step("TemporalReference(again)", "NeedsClarification", 1.0)
+                return resolved
+            
+            # Repeat last successful command
+            last_cmd = None
+            if snapshot.last_success and snapshot.last_command:
+                last_cmd = snapshot.last_command
+            elif snapshot.history:
+                for entry in reversed(snapshot.history):
+                    if entry.get("status") == "success":
+                        last_cmd = entry.get("command")
+                        break
+            if last_cmd:
+                parsed_last = CommandParser.parse(last_cmd)
+                resolved_last = self.resolve(parsed_last, snapshot)
+                log_step("TemporalReference(again)", f"ResolvedCommand({resolved_last.raw_command})", 1.0)
+                return resolved_last
             else:
-                last_cmd = None
-                if snapshot.last_success and snapshot.last_command:
-                    last_cmd = snapshot.last_command
-                elif snapshot.history:
-                    for entry in reversed(snapshot.history):
-                        if entry.get("status") == "success":
-                            last_cmd = entry.get("command")
-                            break
-                if last_cmd:
-                    self._log_rewrite(parsed.raw_command, last_cmd, "Repeated last successful command")
-                    return CommandParser.parse(last_cmd)
-
-        # Rule 2: "Search again" -> Reuse last_search_query
-        if resolved.verb == "search" and normalized_obj == "again":
-            if snapshot.last_search_query:
-                resolved.object = snapshot.last_search_query
-                resolved.entities["search_query"] = snapshot.last_search_query
-                resolved.raw_command = f"search {snapshot.last_search_query}"
-                self._log_rewrite(parsed.raw_command, resolved.raw_command, "Repeated last search query")
+                resolved.target = NeedsClarification("What action would you like me to repeat?")
+                log_step("TemporalReference(again)", "NeedsClarification", 1.0)
                 return resolved
 
-        # Rule 3: Browser Search Results ("open the first result")
-        if re.search(r"\b(open|click|go to)?\s*(the\s+)?first\s+result\b", raw_lower):
+        # 2. Browser Search Results ("open the first result")
+        if resolved.object and re.search(r"\b(open|click|go to)?\s*(the\s+)?first\s+result\b", resolved.object.lower()):
             if snapshot.last_search_query:
                 query = snapshot.last_search_query.lower()
                 resolved_url = "https://www.google.com"
@@ -124,114 +210,143 @@ class ContextResolver:
                     resolved_url = f"https://www.{snapshot.last_search_query.lower().replace(' ', '')}.com"
                 
                 resolved.verb = "open"
-                resolved.object = resolved_url
+                resolved.target = BrowserReference(resolved_url)
                 resolved.entities["url"] = resolved_url
                 resolved.raw_command = f"open {resolved_url}"
-                self._log_rewrite(parsed.raw_command, resolved.raw_command, f"Used last_search_query query='{snapshot.last_search_query}'")
+                log_step("BrowserFirstResult", f"BrowserReference({resolved_url})", 1.0)
                 return resolved
 
-        # Rule 4: Pronoun resolution for close/open/window state
-        clean_obj = normalized_obj.replace("again", "").strip()
-        if clean_obj in {"it", "that", "this", "window", "app", "application", ""}:
-            # Handle empty close clarification
-            if resolved.verb == "close" and clean_obj == "":
-                resolved_target = resolve_app_from_context(snapshot)
-                if not resolved_target:
-                    # No app in context, direct clarification response needed
-                    resolved.direct_response = {
-                        "status": "success",
-                        "reply": "Which application would you like me to close?",
-                        "intent": "close_application",
-                        "payload": {"error": "missing_context"}
-                    }
-                    self._log_rewrite(parsed.raw_command, "Bypassed with Clarification Reply", "No active application in context to close")
-                    return resolved
-            else:
-                resolved_target = None
-                window_verbs = {"focus", "maximize", "minimize", "restore", "close"}
-                if resolved.verb in window_verbs:
-                    resolved_target = resolve_window_from_context(snapshot)
-                else:
-                    resolved_target = resolve_app_from_context(snapshot)
+        # 3. Pronoun Reference resolution
+        if isinstance(resolved.target, PronounReference):
+            pronoun = resolved.target.pronoun
+            clean_pronoun = pronoun.replace("again", "").strip()
             
-            if resolved_target:
-                resolved_target = resolved_target.lower()
-                resolved.object = resolved_target
-                if resolved.verb:
-                    resolved.raw_command = f"{resolved.verb} {resolved_target}"
-                
-                # Update app/window entities
-                resolved.entities["app_name"] = resolved_target
-                resolved.entities["window_name"] = resolved_target
-                self._log_rewrite(parsed.raw_command, resolved.raw_command, f"Resolved pronoun to '{resolved_target}'")
+            # Context-specific OCR and Vision targets
+            if resolved.verb == "read" or resolved.verb == "extract":
+                resolved.target = OCRTarget("it")
+                log_step(f"PronounReference({pronoun})", "OCRTarget", 1.0)
+                return resolved
+            if resolved.verb == "describe" or resolved.verb == "observe":
+                resolved.target = VisionTarget("screen")
+                log_step(f"PronounReference({pronoun})", "VisionTarget", 1.0)
                 return resolved
 
-        # Rule 5: Browser Refresh
-        if resolved.verb == "refresh" or "refresh" in raw_lower:
+            # General pronoun resolution following reference priority
+            resolved_target = resolve_pronoun_reference(resolved.verb or "", clean_pronoun, snapshot)
+            resolved.target = resolved_target
+            
+            if isinstance(resolved_target, NeedsClarification):
+                log_step(f"PronounReference({pronoun})", f"NeedsClarification: {resolved_target.reply}", 1.0)
+                return resolved
+            
+            # Convert target name/path to string representation for command reconstruction
+            target_str = ""
+            if hasattr(resolved_target, "window_name"):
+                target_str = resolved_target.window_name
+            elif hasattr(resolved_target, "app_name"):
+                target_str = resolved_target.app_name
+            elif hasattr(resolved_target, "browser_name"):
+                target_str = resolved_target.browser_name
+            elif hasattr(resolved_target, "file_path"):
+                target_str = resolved_target.file_path
+            
+            if resolved.verb and target_str:
+                resolved.raw_command = f"{resolved.verb} {target_str}"
+            if target_str:
+                resolved.entities["app_name"] = target_str
+                resolved.entities["window_name"] = target_str
+            
+            log_step(f"PronounReference({pronoun})", str(resolved_target), 1.0)
+            return resolved
+
+        # 4. Previous Window Reference resolution
+        if isinstance(resolved.target, PreviousWindowReference):
+            if snapshot.last_window:
+                resolved.target = WindowReference(snapshot.last_window)
+                if resolved.verb:
+                    resolved.raw_command = f"{resolved.verb} {snapshot.last_window}"
+                log_step("PreviousWindowReference", f"WindowReference({snapshot.last_window})", 1.0)
+            elif snapshot.current_window:
+                resolved.target = WindowReference(snapshot.current_window)
+                if resolved.verb:
+                    resolved.raw_command = f"{resolved.verb} {snapshot.current_window}"
+                log_step("PreviousWindowReference", f"WindowReference({snapshot.current_window})", 1.0)
+            else:
+                resolved.target = NeedsClarification("Which window would you like me to restore?")
+                log_step("PreviousWindowReference", "NeedsClarification", 1.0)
+            return resolved
+
+        # 5. Focused Reference resolution
+        if isinstance(resolved.target, FocusedReference):
+            kw = resolved.target.keyword
+            # "Close current window", "Focus active window", etc.
+            if "window" in kw or "app" in kw or "application" in kw:
+                if snapshot.current_window:
+                    resolved.target = WindowReference(snapshot.current_window)
+                    log_step(f"FocusedReference({kw})", f"WindowReference({snapshot.current_window})", 1.0)
+                elif snapshot.current_application:
+                    resolved.target = WindowReference(snapshot.current_application)
+                    log_step(f"FocusedReference({kw})", f"WindowReference({snapshot.current_application})", 1.0)
+                else:
+                    resolved.target = NeedsClarification("Which window or application is current?")
+                    log_step(f"FocusedReference({kw})", "NeedsClarification", 1.0)
+            elif "textbox" in kw or "text box" in kw:
+                resolved.target = TextBoxReference()
+                log_step(f"FocusedReference({kw})", "TextBoxReference", 1.0)
+            elif snapshot.focused_element:
+                resolved.target = UIElementReference(snapshot.focused_element)
+                log_step(f"FocusedReference({kw})", f"UIElementReference({snapshot.focused_element})", 1.0)
+            else:
+                resolved.target = NeedsClarification(f"Which target is {kw}?")
+                log_step(f"FocusedReference({kw})", "NeedsClarification", 1.0)
+            return resolved
+
+        # 6. Type action with focused control implicit target
+        if resolved.verb == "type" and resolved.target is None:
+            if snapshot.focused_control and "textbox" in snapshot.focused_control.lower():
+                resolved.target = TextBoxReference()
+                log_step("ImplicitTypeTarget", "TextBoxReference", 1.0)
+            elif snapshot.focused_element and "textbox" in snapshot.focused_element.lower():
+                resolved.target = TextBoxReference()
+                log_step("ImplicitTypeTarget", "TextBoxReference", 1.0)
+
+        # 7. Browser Refresh and Navigation checks
+        if resolved.verb == "refresh" or (isinstance(resolved.target, ReferenceWrapper) and resolved.target.value.lower() == "page"):
             if snapshot.current_browser:
                 resolved.verb = "refresh"
-                resolved.object = "page"
+                resolved.target = BrowserReference(snapshot.current_browser)
                 resolved.raw_command = "refresh"
-                self._log_rewrite(parsed.raw_command, resolved.raw_command, "Browser refresh matched")
+                log_step("BrowserRefresh", f"BrowserReference({snapshot.current_browser})", 1.0)
                 return resolved
 
-        # Rule 6: Browser Go Back
-        if (resolved.verb == "go" and clean_obj == "back") or "go back" in raw_lower:
+        if resolved.verb == "go" and isinstance(resolved.target, ReferenceWrapper) and resolved.target.value.lower() == "back":
             if snapshot.current_browser:
                 resolved.verb = "go"
-                resolved.object = "back"
+                resolved.target = BrowserReference(snapshot.current_browser)
+                resolved.entities["navigation_direction"] = "back"
                 resolved.raw_command = "go back"
-                self._log_rewrite(parsed.raw_command, resolved.raw_command, "Browser go back matched")
+                log_step("BrowserGoBack", f"BrowserReference({snapshot.current_browser})", 1.0)
                 return resolved
 
-        # Rule 7: Context query mappings to conversation queries
+        # 8. Context query mappings to conversation queries
         if "what did you open" in raw_lower or "what did i open" in raw_lower:
             resolved.verb = "query"
-            resolved.object = "last_opened_application"
+            resolved.target = ReferenceWrapper("last_opened_application")
             resolved.entities["query_type"] = "last_opened_application"
-            self._log_rewrite(parsed.raw_command, "Conversation query: last_opened_application", "Context query matched")
+            log_step("ContextQuery", "last_opened_application", 1.0)
             return resolved
-        elif "what application is open" in raw_lower or "what app is open" in raw_lower:
+        elif "what application is open" in raw_lower or "what app is open" in raw_lower or "what application is currently open" in raw_lower:
             resolved.verb = "query"
-            resolved.object = "current_application"
+            resolved.target = ReferenceWrapper("current_application")
             resolved.entities["query_type"] = "current_application"
-            self._log_rewrite(parsed.raw_command, "Conversation query: current_application", "Context query matched")
+            log_step("ContextQuery", "current_application", 1.0)
             return resolved
         elif "what website" in raw_lower or "what site" in raw_lower or "what url" in raw_lower:
             resolved.verb = "query"
-            resolved.object = "current_website"
+            resolved.target = ReferenceWrapper("current_website")
             resolved.entities["query_type"] = "current_website"
-            self._log_rewrite(parsed.raw_command, "Conversation query: current_website", "Context query matched")
+            log_step("ContextQuery", "current_website", 1.0)
             return resolved
 
-        self._log_no_rewrite("No matching context rules applied")
+        # Default: no rewrite
         return resolved
-
-    def _log_rewrite(self, original: str, resolved: str, reason: str) -> None:
-        log_str = (
-            "\n========================\n"
-            "Context Resolver\n"
-            "Original:\n"
-            f"{original}\n"
-            "Resolved:\n"
-            f"{resolved}\n"
-            "Reason:\n"
-            f"{reason}\n"
-            "========================\n"
-        )
-        import logging
-        logging.getLogger(__name__).info(log_str)
-        print(log_str, flush=True)
-
-    def _log_no_rewrite(self, reason: str) -> None:
-        log_str = (
-            "\n========================\n"
-            "Context Resolver\n"
-            "No rewrite\n"
-            "Reason:\n"
-            f"{reason}\n"
-            "========================\n"
-        )
-        import logging
-        logging.getLogger(__name__).info(log_str)
-        print(log_str, flush=True)

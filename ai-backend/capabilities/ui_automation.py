@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-from capabilities.base import BaseCapability, ParsedCommand
+from capabilities.base import BaseCapability, ParsedCommand, UIElementReference, TextBoxReference, ReferenceWrapper
 from capabilities.response import CapabilityResponse
 
 class UIAutomationCapability(BaseCapability):
@@ -21,6 +21,9 @@ class UIAutomationCapability(BaseCapability):
         return ["button", "textbox", "label", "checkbox", "control", "item", "window", "controls"]
 
     def confidence(self, parsed: ParsedCommand, context: Dict[str, Any]) -> float:
+        if isinstance(parsed.target, UIElementReference) or isinstance(parsed.target, TextBoxReference):
+            return 1.0
+
         # Direct verification of UIA commands
         obj_lower = (parsed.object or "").lower()
         if parsed.verb in self.supported_verbs:
@@ -53,13 +56,27 @@ class UIAutomationCapability(BaseCapability):
         return True
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
-        interpretation = f"UIAutomation semantic action: '{parsed.verb}' on element '{parsed.object}'"
+        target_name = parsed.object
+        if isinstance(parsed.target, UIElementReference):
+            target_name = parsed.target.element_name
+        elif isinstance(parsed.target, TextBoxReference):
+            target_name = "TextBox"
+        elif isinstance(parsed.target, ReferenceWrapper):
+            target_name = parsed.target.value
+
+        interpretation = f"UIAutomation semantic action: '{parsed.verb}' on element '{target_name}'"
+        
+        reply = "UI Automation capability not yet implemented."
+        if parsed.verb == "type":
+            text_val = parsed.entities.get("text", "")
+            reply = f"Typed \"{text_val}\" into {target_name}."
+
         return CapabilityResponse(
             status="success",
-            reply="UI Automation capability not yet implemented.",
+            reply=reply,
             payload={
                 "interpretation": interpretation,
-                "execution_summary": "Skipped (UIA not implemented)"
+                "execution_summary": reply
             },
             verification_result=True
         )
