@@ -291,7 +291,7 @@ def parse_intent(text: str) -> Dict[str, Dict[str, Optional[str]]]:
         intent = "show_tasks"
     elif re.search(r"\b(search|look up|find|google)\b", normalized) and _extract_search_query(text):
         intent = "search_web"
-    elif re.search(r"\b(active window|current window|which window)\b", normalized):
+    elif re.search(r"\b(active window|current window|which window)\b", normalized) and not re.search(r"\b(close|exit|quit|terminate|kill|remove|minimize|minimise|maximize|restore|focus|bring|switch)\b", normalized):
         intent = "get_active_window"
     elif (
         re.search(r"\b(list|show|what).*(windows?)\b", normalized)

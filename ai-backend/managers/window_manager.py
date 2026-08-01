@@ -145,3 +145,111 @@ def resize_window(title: str, width: int, height: int) -> WindowOperationResult:
         )
     except Exception as e:
         return WindowOperationResult(success=False, reason=str(e))
+
+def focus_window_by_hwnd(hwnd: int) -> WindowOperationResult:
+    try:
+        success, win_info, err = _manager.focus_window_by_hwnd(hwnd)
+        return WindowOperationResult(
+            success=success,
+            matched_title=win_info.title if win_info else None,
+            handle=win_info.hwnd if win_info else None,
+            reason=err,
+            process_name=win_info.process_name if win_info else None,
+            error_code=err
+        )
+    except Exception as e:
+        return WindowOperationResult(success=False, reason=str(e), error_code="ACCESS_DENIED")
+
+def maximize_window_by_hwnd(hwnd: int) -> WindowOperationResult:
+    try:
+        success, win_info, err = _manager.maximize_window_by_hwnd(hwnd)
+        return WindowOperationResult(
+            success=success,
+            matched_title=win_info.title if win_info else None,
+            handle=win_info.hwnd if win_info else None,
+            reason=err,
+            process_name=win_info.process_name if win_info else None,
+            error_code=err
+        )
+    except Exception as e:
+        return WindowOperationResult(success=False, reason=str(e), error_code="ACCESS_DENIED")
+
+def minimize_window_by_hwnd(hwnd: int) -> WindowOperationResult:
+    try:
+        success, win_info, err = _manager.minimize_window_by_hwnd(hwnd)
+        return WindowOperationResult(
+            success=success,
+            matched_title=win_info.title if win_info else None,
+            handle=win_info.hwnd if win_info else None,
+            reason=err,
+            process_name=win_info.process_name if win_info else None,
+            error_code=err
+        )
+    except Exception as e:
+        return WindowOperationResult(success=False, reason=str(e), error_code="ACCESS_DENIED")
+
+def restore_window_by_hwnd(hwnd: int) -> WindowOperationResult:
+    try:
+        success, win_info, err = _manager.restore_window_by_hwnd(hwnd)
+        return WindowOperationResult(
+            success=success,
+            matched_title=win_info.title if win_info else None,
+            handle=win_info.hwnd if win_info else None,
+            reason=err,
+            process_name=win_info.process_name if win_info else None,
+            error_code=err
+        )
+    except Exception as e:
+        return WindowOperationResult(success=False, reason=str(e), error_code="ACCESS_DENIED")
+
+def toggle_minimize_by_hwnd(hwnd: int) -> WindowOperationResult:
+    try:
+        success, win_info, err = _manager.toggle_minimize_by_hwnd(hwnd)
+        return WindowOperationResult(
+            success=success,
+            matched_title=win_info.title if win_info else None,
+            handle=win_info.hwnd if win_info else None,
+            reason=err,
+            error_code=err
+        )
+    except Exception as e:
+        return WindowOperationResult(success=False, reason=str(e))
+
+def close_window_by_hwnd(hwnd: int) -> WindowOperationResult:
+    try:
+        success, win_info, err = _manager.close_window_by_hwnd(hwnd)
+        return WindowOperationResult(
+            success=success,
+            matched_title=win_info.title if win_info else None,
+            handle=win_info.hwnd if win_info else None,
+            reason=err,
+            error_code=err
+        )
+    except Exception as e:
+        return WindowOperationResult(success=False, reason=str(e))
+
+def move_window_by_hwnd(hwnd: int, x: int, y: int, width: int, height: int) -> WindowOperationResult:
+    try:
+        success, win_info, err = _manager.move_window_by_hwnd(hwnd, x, y, width, height)
+        return WindowOperationResult(
+            success=success,
+            matched_title=win_info.title if win_info else None,
+            handle=win_info.hwnd if win_info else None,
+            reason=err,
+            error_code=err
+        )
+    except Exception as e:
+        return WindowOperationResult(success=False, reason=str(e))
+
+def resize_window_by_hwnd(hwnd: int, width: int, height: int) -> WindowOperationResult:
+    try:
+        success, win_info, err = _manager.resize_window_by_hwnd(hwnd, width, height)
+        return WindowOperationResult(
+            success=success,
+            matched_title=win_info.title if win_info else None,
+            handle=win_info.hwnd if win_info else None,
+            reason=err,
+            error_code=err
+        )
+    except Exception as e:
+        return WindowOperationResult(success=False, reason=str(e))

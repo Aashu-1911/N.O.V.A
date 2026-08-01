@@ -32,6 +32,15 @@ class ApplicationReference(Reference):
     app_name: str
 
 @dataclass
+class ResolvedWindowTarget(Reference):
+    hwnd: Optional[int]
+    pid: int
+    process_name: str
+    application: str
+    title: str
+    error_code: Optional[str] = None
+
+@dataclass
 class BrowserReference(Reference):
     browser_name: str
 

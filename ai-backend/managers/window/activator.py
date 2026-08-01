@@ -41,19 +41,43 @@ class WindowActivator:
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
             time.sleep(0.05)
 
-        # 2. Show the window if hidden
+        # 2. Show the window if hidden or not visible
         if not win32gui.IsWindowVisible(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
             time.sleep(0.05)
+        else:
+            # Force show window to ensure it is drawn on top of the OS rendering stack
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
 
-        # 3. Allow SetForegroundWindow on target thread
+        # 3. Allow SetForegroundWindow on target thread & tap Alt to bypass foreground lock
         try:
             ctypes.windll.user32.AllowSetForegroundWindow(-1)
         except Exception:
             pass
+            
+        try:
+            # Alt key tap to relax foreground restrictions
+            ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)  # ALT down
+            ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)  # ALT up
+        except Exception:
+            pass
 
-        # 4. Bring Window to Top
-        win32gui.BringWindowToTop(hwnd)
+        # 4. Bring Window to Top of the Z-order using the topmost/notopmost trick
+        try:
+            win32gui.SetWindowPos(
+                hwnd, 
+                win32con.HWND_TOPMOST, 
+                0, 0, 0, 0, 
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+            )
+            win32gui.SetWindowPos(
+                hwnd, 
+                win32con.HWND_NOTOPMOST, 
+                0, 0, 0, 0, 
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+            )
+        except Exception:
+            win32gui.BringWindowToTop(hwnd)
 
         success = False
         reason = None
@@ -93,9 +117,33 @@ class WindowActivator:
                     win32process.AttachThreadInput(curr_thread_id, target_thread_id, True)
                     attached_target = True
 
+                # Force Z-order again while attached
+                try:
+                    win32gui.SetWindowPos(
+                        hwnd, 
+                        win32con.HWND_TOPMOST, 
+                        0, 0, 0, 0, 
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                    )
+                    win32gui.SetWindowPos(
+                        hwnd, 
+                        win32con.HWND_NOTOPMOST, 
+                        0, 0, 0, 0, 
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+                    )
+                except Exception:
+                    pass
+
                 # Perform activation sequence
                 win32gui.BringWindowToTop(hwnd)
                 win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                
+                # SwitchToThisWindow Undocumented API fallback
+                try:
+                    ctypes.windll.user32.SwitchToThisWindow(hwnd, True)
+                except Exception:
+                    pass
+
                 win32gui.SetForegroundWindow(hwnd)
                 win32gui.SetActiveWindow(hwnd)
                 win32gui.SetFocus(hwnd)

@@ -1,0 +1,13 @@
+{
+  "ollama_url": "http://localhost:11434",
+  "default_model": "hermes3:8b",
+  "fallback_model": "qwen3:8b",
+  "temperature": 0.2,
+  "top_p": 0.9,
+  "repeat_penalty": 1.1,
+  "context_length": 2048,
+  "timeout": 60.0,
+  "streaming": true,
+  "json_mode": false,
+  "system_prompt": "You are N.O.V.A., a smart personal desktop AI assistant."
+}

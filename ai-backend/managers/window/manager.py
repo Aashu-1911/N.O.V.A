@@ -279,3 +279,215 @@ class WindowManager:
             return True, win_info, None
         except Exception as e:
             return False, None, str(e)
+
+    def _build_basic_info(self, hwnd: int) -> WindowInfo:
+        import win32process
+        title = win32gui.GetWindowText(hwnd)
+        wclass = win32gui.GetClassName(hwnd)
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        except Exception:
+            pid = 0
+        pname, ppath, pctime = self.process_cache.get_process_info(pid)
+        return WindowInfo(
+            hwnd=hwnd, pid=pid, process_name=pname, executable_path=ppath,
+            title=title, window_class=wclass, monitor=0, is_visible=True,
+            is_foreground=False, is_minimized=False, is_maximized=False,
+            is_cloaked=False, z_order=999, creation_time=pctime, capabilities=[]
+        )
+
+    def _get_info_by_hwnd(self, hwnd: int) -> Tuple[Optional[WindowInfo], Optional[str]]:
+        if not win32gui.IsWindow(hwnd):
+            return None, "WINDOW_DESTROYED"
+        self.cache.get_all_windows(force_refresh=True)
+        chosen = next((w for w in self.cache._cached_windows if w.hwnd == hwnd), None)
+        if not chosen:
+            chosen = self._build_basic_info(hwnd)
+        return chosen, None
+
+    def focus_window_by_hwnd(self, hwnd: int) -> Tuple[bool, Optional[WindowInfo], Optional[str]]:
+        t0 = time.time()
+        api_calls = []
+        
+        # Check if query is already active to detect no-op
+        active_hwnd = win32gui.GetForegroundWindow()
+        if active_hwnd == hwnd:
+            chosen, _ = self._get_info_by_hwnd(hwnd)
+            if chosen:
+                self.history.record_focus(chosen, "focus")
+                self._log_operation("focus", str(hwnd), t0, [(chosen, 1.0)], chosen, ["GetForegroundWindow (no-op)"], True, None)
+                return True, chosen, None
+
+        chosen, err = self._get_info_by_hwnd(hwnd)
+        if err:
+            self._log_operation("focus", str(hwnd), t0, [], None, [], False, err)
+            return False, None, err
+
+        api_calls.append("ResolveWindowByHWND")
+        
+        # Activate window
+        success, act_err = self.activator.activate(hwnd)
+        api_calls.append("ShowWindow/BringWindowToTop/SetForegroundWindow")
+        if not success:
+            self._log_operation("focus", str(hwnd), t0, [], chosen, api_calls, False, act_err)
+            return False, chosen, act_err
+
+        # Verify
+        verified = self.verifier.verify_focus(hwnd)
+        api_calls.append("VerifyFocus")
+        if not verified:
+            self._log_operation("focus", str(hwnd), t0, [], chosen, api_calls, False, "FOREGROUND_RESTRICTED")
+            return False, chosen, "FOREGROUND_RESTRICTED"
+
+        # Record focus
+        self.history.record_focus(chosen, "focus")
+        self.cache.invalidate()
+        self._log_operation("focus", str(hwnd), t0, [], chosen, api_calls, True, None)
+        return True, chosen, None
+
+    def maximize_window_by_hwnd(self, hwnd: int) -> Tuple[bool, Optional[WindowInfo], Optional[str]]:
+        t0 = time.time()
+        chosen, err = self._get_info_by_hwnd(hwnd)
+        if err:
+            self._log_operation("maximize", str(hwnd), t0, [], None, [], False, err)
+            return False, None, err
+
+        api_calls = ["ShowWindow(SW_MAXIMIZE)"]
+        try:
+            win32gui.ShowWindow(hwnd, win32con.SW_MAXIMIZE)
+        except Exception as e:
+            self._log_operation("maximize", str(hwnd), t0, [], chosen, api_calls, False, str(e))
+            return False, chosen, "ACCESS_DENIED"
+
+        verified = self.verifier.verify_maximize(hwnd)
+        api_calls.append("VerifyMaximize")
+        if not verified:
+            self._log_operation("maximize", str(hwnd), t0, [], chosen, api_calls, False, "STATE_MUTATION_FAILED")
+            return False, chosen, "STATE_MUTATION_FAILED"
+
+        self.cache.invalidate()
+        self._log_operation("maximize", str(hwnd), t0, [], chosen, api_calls, True, None)
+        return True, chosen, None
+
+    def minimize_window_by_hwnd(self, hwnd: int) -> Tuple[bool, Optional[WindowInfo], Optional[str]]:
+        t0 = time.time()
+        chosen, err = self._get_info_by_hwnd(hwnd)
+        if err:
+            self._log_operation("minimize", str(hwnd), t0, [], None, [], False, err)
+            return False, None, err
+
+        api_calls = ["ShowWindow(SW_MINIMIZE)"]
+        try:
+            win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+        except Exception as e:
+            self._log_operation("minimize", str(hwnd), t0, [], chosen, api_calls, False, str(e))
+            return False, chosen, "ACCESS_DENIED"
+
+        verified = self.verifier.verify_minimize(hwnd)
+        api_calls.append("VerifyMinimize")
+        if not verified:
+            self._log_operation("minimize", str(hwnd), t0, [], chosen, api_calls, False, "STATE_MUTATION_FAILED")
+            return False, chosen, "STATE_MUTATION_FAILED"
+
+        self.cache.invalidate()
+        self._log_operation("minimize", str(hwnd), t0, [], chosen, api_calls, True, None)
+        return True, chosen, None
+
+    def restore_window_by_hwnd(self, hwnd: int) -> Tuple[bool, Optional[WindowInfo], Optional[str]]:
+        t0 = time.time()
+        chosen, err = self._get_info_by_hwnd(hwnd)
+        if err:
+            self._log_operation("restore", str(hwnd), t0, [], None, [], False, err)
+            return False, None, err
+
+        api_calls = ["ShowWindow(SW_RESTORE)"]
+        try:
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+        except Exception as e:
+            self._log_operation("restore", str(hwnd), t0, [], chosen, api_calls, False, str(e))
+            return False, chosen, "ACCESS_DENIED"
+
+        verified = self.verifier.verify_restore(hwnd)
+        api_calls.append("VerifyRestore")
+        if not verified:
+            self._log_operation("restore", str(hwnd), t0, [], chosen, api_calls, False, "STATE_MUTATION_FAILED")
+            return False, chosen, "STATE_MUTATION_FAILED"
+
+        self.cache.invalidate()
+        self._log_operation("restore", str(hwnd), t0, [], chosen, api_calls, True, None)
+        return True, chosen, None
+
+    def toggle_minimize_by_hwnd(self, hwnd: int) -> Tuple[bool, Optional[WindowInfo], Optional[str]]:
+        chosen, err = self._get_info_by_hwnd(hwnd)
+        if err:
+            return False, None, err
+        if chosen.is_minimized:
+            return self.restore_window_by_hwnd(hwnd)
+        else:
+            return self.minimize_window_by_hwnd(hwnd)
+
+    def close_window_by_hwnd(self, hwnd: int) -> Tuple[bool, Optional[WindowInfo], Optional[str]]:
+        t0 = time.time()
+        chosen, err = self._get_info_by_hwnd(hwnd)
+        if err:
+            err_code = "WINDOW_ALREADY_CLOSED" if err == "WINDOW_DESTROYED" else err
+            self._log_operation("close", str(hwnd), t0, [], None, [], False, err_code)
+            return False, None, err_code
+
+        api_calls = ["PostMessage(WM_CLOSE)"]
+        try:
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+        except Exception as e:
+            self._log_operation("close", str(hwnd), t0, [], chosen, api_calls, False, str(e))
+            return False, chosen, "ACCESS_DENIED"
+
+        # Verify window is closed
+        success = False
+        for _ in range(10):
+            if not win32gui.IsWindow(hwnd):
+                success = True
+                break
+            time.sleep(0.05)
+
+        api_calls.append("VerifyDestroyed")
+        if not success:
+            self._log_operation("close", str(hwnd), t0, [], chosen, api_calls, False, "STATE_MUTATION_FAILED")
+            return False, chosen, "STATE_MUTATION_FAILED"
+
+        self.cache.invalidate()
+        self._log_operation("close", str(hwnd), t0, [], chosen, api_calls, True, None)
+        return True, chosen, None
+
+    def move_window_by_hwnd(self, hwnd: int, x: int, y: int, width: int, height: int) -> Tuple[bool, Optional[WindowInfo], Optional[str]]:
+        t0 = time.time()
+        chosen, err = self._get_info_by_hwnd(hwnd)
+        if err:
+            return False, None, err
+        api_calls = ["SetWindowPos"]
+        try:
+            win32gui.SetWindowPos(hwnd, 0, x, y, width, height, win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE)
+        except Exception as e:
+            self._log_operation("move", str(hwnd), t0, [], chosen, api_calls, False, str(e))
+            return False, chosen, "ACCESS_DENIED"
+        
+        self.cache.invalidate()
+        self._log_operation("move", str(hwnd), t0, [], chosen, api_calls, True, None)
+        return True, chosen, None
+
+    def resize_window_by_hwnd(self, hwnd: int, width: int, height: int) -> Tuple[bool, Optional[WindowInfo], Optional[str]]:
+        t0 = time.time()
+        chosen, err = self._get_info_by_hwnd(hwnd)
+        if err:
+            return False, None, err
+        api_calls = ["SetWindowPos"]
+        try:
+            rect = win32gui.GetWindowRect(hwnd)
+            x, y = rect[0], rect[1]
+            win32gui.SetWindowPos(hwnd, 0, x, y, width, height, win32con.SWP_NOZORDER | win32con.SWP_NOMOVE | win32con.SWP_NOACTIVATE)
+        except Exception as e:
+            self._log_operation("resize", str(hwnd), t0, [], chosen, api_calls, False, str(e))
+            return False, chosen, "ACCESS_DENIED"
+        
+        self.cache.invalidate()
+        self._log_operation("resize", str(hwnd), t0, [], chosen, api_calls, True, None)
+        return True, chosen, None

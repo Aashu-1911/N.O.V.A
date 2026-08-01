@@ -38,20 +38,33 @@ def _execute_window_action(
     manager_fn: Callable[[str], window_manager.WindowOperationResult],
     window_name: Optional[str],
     context: Optional[Dict[str, Any]] = None,
+    hwnd: Optional[int] = None,
 ) -> ResponseDict:
-    name = _resolve_window(window_name, context)
-
-    if not name:
-        return error("No window name provided.")
-
     try:
-        result = manager_fn(name)
+        if hwnd is not None:
+            by_hwnd_name = f"{action_name.replace(' ', '_')}_window_by_hwnd"
+            if action_name == "focus":
+                by_hwnd_name = "focus_window_by_hwnd"
+            elif action_name == "toggle minimize":
+                by_hwnd_name = "toggle_minimize_by_hwnd"
+                
+            by_hwnd_fn = getattr(window_manager, by_hwnd_name, None)
+            if by_hwnd_fn:
+                result = by_hwnd_fn(hwnd)
+            else:
+                return error(f"Unable to execute {action_name} window action.")
+        else:
+            name = _resolve_window(window_name, context)
+            if not name:
+                return error("No window name provided.")
+            result = manager_fn(name)
 
         if not result.success:
             err_code = result.error_code or "UNKNOWN_ERROR"
             reason = (result.reason or "").lower()
             if err_code == "WINDOW_NOT_FOUND" or "not found" in reason:
-                return error(f"Window '{name}' was not found.", payload={"error_code": err_code})
+                display_name = window_name or name or hwnd or "target"
+                return error(f"Window '{display_name}' was not found.", payload={"error_code": err_code})
             return error(f"Unable to {action_name} window.", payload={"error_code": err_code})
 
         verb = _VERB_PAST.get(action_name, action_name.capitalize() + "d")
@@ -75,6 +88,7 @@ def handle_focus_window(
         window_manager.focus_window,
         entities.get("window_name"),
         context,
+        hwnd=entities.get("window_handle")
     )
 
 
@@ -87,6 +101,7 @@ def handle_maximize_window(
         window_manager.maximize_window,
         entities.get("window_name"),
         context,
+        hwnd=entities.get("window_handle")
     )
 
 
@@ -99,6 +114,7 @@ def handle_minimize_window(
         window_manager.minimize_window,
         entities.get("window_name"),
         context,
+        hwnd=entities.get("window_handle")
     )
 
 
@@ -111,6 +127,7 @@ def handle_restore_window(
         window_manager.restore_window,
         entities.get("window_name"),
         context,
+        hwnd=entities.get("window_handle")
     )
 
 
@@ -123,6 +140,7 @@ def handle_close_window(
         window_manager.close_window,
         entities.get("window_name"),
         context,
+        hwnd=entities.get("window_handle")
     )
 
 
@@ -135,6 +153,7 @@ def handle_toggle_minimize(
         window_manager.toggle_minimize,
         entities.get("window_name"),
         context,
+        hwnd=entities.get("window_handle")
     )
 
 
@@ -146,8 +165,24 @@ def handle_move_window(
     y = int(entities.get("y", 100))
     width = int(entities.get("width", 800))
     height = int(entities.get("height", 600))
-    name = _resolve_window(entities.get("window_name"), context)
     
+    hwnd = entities.get("window_handle")
+    if hwnd is not None:
+        try:
+            res = window_manager.move_window_by_hwnd(hwnd, x, y, width, height)
+            if not res.success:
+                return error("Unable to move window.", payload={"error_code": res.error_code})
+            return success(
+                f"Moved {res.matched_title}.",
+                payload={
+                    "window_title": res.matched_title,
+                    "window_handle": res.handle,
+                },
+            )
+        except Exception:
+            return error("Unable to move window.")
+
+    name = _resolve_window(entities.get("window_name"), context)
     if not name:
         return error("No window name provided.")
         
@@ -172,8 +207,24 @@ def handle_resize_window(
 ) -> ResponseDict:
     width = int(entities.get("width", 800))
     height = int(entities.get("height", 600))
-    name = _resolve_window(entities.get("window_name"), context)
     
+    hwnd = entities.get("window_handle")
+    if hwnd is not None:
+        try:
+            res = window_manager.resize_window_by_hwnd(hwnd, width, height)
+            if not res.success:
+                return error("Unable to resize window.", payload={"error_code": res.error_code})
+            return success(
+                f"Resized {res.matched_title}.",
+                payload={
+                    "window_title": res.matched_title,
+                    "window_handle": res.handle,
+                },
+            )
+        except Exception:
+            return error("Unable to resize window.")
+
+    name = _resolve_window(entities.get("window_name"), context)
     if not name:
         return error("No window name provided.")
         

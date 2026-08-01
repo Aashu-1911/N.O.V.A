@@ -275,5 +275,84 @@ class OllamaClient:
 _DEFAULT_CLIENT = OllamaClient()
 
 
-def send_message(user_message: str, conversation_history: Optional[Iterable[Dict[str, str]]] = None):
-    return _DEFAULT_CLIENT.send_message(user_message, conversation_history)
+def send_message(user_message: str, conversation_history: Optional[Iterable[Dict[str, str]]] = None) -> List[str]:
+    import re
+    from services.llm.service import LLMService
+    from voice.metrics import request_context
+    
+    service = LLMService()
+    service.select_model("AUTO")
+    
+    is_voice = getattr(request_context, "metrics", None) is not None
+    
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT}
+    ]
+    if conversation_history:
+        history = list(conversation_history)[-6:]
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
+    chunks = []
+    try:
+        if is_voice:
+            from voice import speak_async
+            from adapters.voice_adapter import format_for_voice
+            sentence_buffer = ""
+            sentence_end_re = re.compile(r'([^.!?]+[.!?]+)\s*')
+            
+            for chunk in service.stream_chat(messages):
+                chunks.append(chunk)
+                sentence_buffer += chunk
+                matches = list(sentence_end_re.finditer(sentence_buffer))
+                if matches:
+                    last_end = 0
+                    for match in matches:
+                        sentence = match.group(1).strip()
+                        if sentence:
+                            spoken = format_for_voice(sentence)
+                            if spoken:
+                                logger.info(f"[ollama_service] Streaming TTS: speak_async({spoken!r})")
+                                speak_async(spoken)
+                        last_end = match.end()
+                    sentence_buffer = sentence_buffer[last_end:]
+            
+            remaining = sentence_buffer.strip()
+            if remaining:
+                spoken = format_for_voice(remaining)
+                if spoken:
+                    logger.info(f"[ollama_service] Streaming TTS (final): speak_async({spoken!r})")
+                    speak_async(spoken)
+        else:
+            for chunk in service.stream_chat(messages):
+                chunks.append(chunk)
+        return chunks
+    except Exception as e:
+        logger.warning(f"[ollama_service] Provider {service.active_provider.model_name} failed. Retrying with fallback: {e}")
+        fallback_target = service.fallback_provider if service.active_provider != service.fallback_provider else service.default_provider
+        try:
+            fallback_chunks = list(fallback_target.stream_chat(messages))
+            return fallback_chunks
+        except Exception as final_exc:
+            logger.error(f"[ollama_service] Both default and fallback providers failed: {final_exc}")
+            raise final_exc
+
+
+def generate_text(prompt: str, system_prompt: Optional[str] = None) -> List[str]:
+    from services.llm.service import LLMService
+    service = LLMService()
+    service.select_model("AUTO")
+    
+    chunks = []
+    try:
+        for chunk in service.stream(prompt, system_prompt=system_prompt):
+            chunks.append(chunk)
+        return chunks
+    except Exception as e:
+        logger.warning(f"[ollama_service] Provider {service.active_provider.model_name} failed on generate. Retrying with fallback: {e}")
+        fallback_target = service.fallback_provider if service.active_provider != service.fallback_provider else service.default_provider
+        try:
+            return list(fallback_target.stream(prompt, system_prompt=system_prompt))
+        except Exception as final_exc:
+            logger.error(f"[ollama_service] Both default and fallback providers failed on generate: {final_exc}")
+            raise final_exc

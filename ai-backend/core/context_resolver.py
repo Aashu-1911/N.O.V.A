@@ -6,7 +6,8 @@ from capabilities.base import (
     WindowReference, ApplicationReference, BrowserReference, UIElementReference,
     VisionTarget, OCRTarget, FileReference, ClipboardReference,
     SelectionReference, CursorReference, TextBoxReference, PreviousWindowReference,
-    TemporalReference, FocusedReference, LocationReference, NeedsClarification
+    TemporalReference, FocusedReference, LocationReference, NeedsClarification,
+    ResolvedWindowTarget
 )
 from capabilities.parser import CommandParser
 
@@ -288,8 +289,15 @@ class ContextResolver:
                     resolved.target = WindowReference(snapshot.current_application)
                     log_step(f"FocusedReference({kw})", f"WindowReference({snapshot.current_application})", 1.0)
                 else:
-                    resolved.target = NeedsClarification("Which window or application is current?")
-                    log_step(f"FocusedReference({kw})", "NeedsClarification", 1.0)
+                    # Fallback to active foreground window
+                    from managers import window_manager
+                    success, active_info, _ = window_manager._manager.get_active_window()
+                    if success and active_info and active_info.title:
+                        resolved.target = WindowReference(active_info.title)
+                        log_step(f"FocusedReference({kw})", f"WindowReference({active_info.title})", 1.0)
+                    else:
+                        resolved.target = NeedsClarification("Which window or application is current?")
+                        log_step(f"FocusedReference({kw})", "NeedsClarification", 1.0)
             elif "textbox" in kw or "text box" in kw:
                 resolved.target = TextBoxReference()
                 log_step(f"FocusedReference({kw})", "TextBoxReference", 1.0)
@@ -347,6 +355,63 @@ class ContextResolver:
             resolved.entities["query_type"] = "current_website"
             log_step("ContextQuery", "current_website", 1.0)
             return resolved
+
+        # 9. Single-pass Window Target Resolution
+        window_verbs = {"focus", "maximize", "minimize", "restore", "close", "toggle_minimize", "move", "resize"}
+        if resolved.verb in window_verbs and not isinstance(resolved.target, NeedsClarification):
+            # Extract target query
+            target_query = None
+            if isinstance(resolved.target, WindowReference):
+                target_query = resolved.target.window_name
+            elif isinstance(resolved.target, ApplicationReference):
+                target_query = resolved.target.app_name
+            elif isinstance(resolved.target, ReferenceWrapper):
+                target_query = resolved.target.value
+            elif isinstance(resolved.target, PronounReference):
+                target_query = resolved.target.pronoun
+
+            if isinstance(resolved.target, ResolvedWindowTarget):
+                pass
+            elif target_query is not None or resolved.verb == "close":
+                from managers import window_manager
+                if not target_query:
+                    # Attempt to resolve current active window for closing
+                    success, active_info, _ = window_manager._manager.get_active_window()
+                    if success and active_info:
+                        resolved.target = ResolvedWindowTarget(
+                            hwnd=active_info.hwnd,
+                            pid=active_info.pid,
+                            process_name=active_info.process_name,
+                            application=active_info.process_name.replace(".exe", ""),
+                            title=active_info.title
+                        )
+                        resolved.entities["window_handle"] = active_info.hwnd
+                        resolved.entities["window_name"] = active_info.title
+                        resolved.entities["app_name"] = active_info.process_name.replace(".exe", "")
+                else:
+                    chosen, scored, err = window_manager._manager.get_window_info(target_query)
+                    if chosen:
+                        resolved.target = ResolvedWindowTarget(
+                            hwnd=chosen.hwnd,
+                            pid=chosen.pid,
+                            process_name=chosen.process_name,
+                            application=chosen.process_name.replace(".exe", ""),
+                            title=chosen.title
+                        )
+                        resolved.entities["window_handle"] = chosen.hwnd
+                        resolved.entities["window_name"] = chosen.title
+                        resolved.entities["app_name"] = chosen.process_name.replace(".exe", "")
+                    else:
+                        resolved.target = ResolvedWindowTarget(
+                            hwnd=None,
+                            pid=0,
+                            process_name="",
+                            application="",
+                            title=target_query,
+                            error_code=err or "WINDOW_NOT_FOUND"
+                        )
+                        resolved.entities["window_handle"] = None
+                        resolved.entities["window_name"] = target_query
 
         # Default: no rewrite
         return resolved

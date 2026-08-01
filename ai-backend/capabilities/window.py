@@ -1,12 +1,13 @@
 from typing import Any, Dict, List
 from capabilities.base import (
     BaseCapability, ParsedCommand, WindowReference, ApplicationReference,
-    BrowserReference, ReferenceWrapper
+    BrowserReference, ReferenceWrapper, ResolvedWindowTarget
 )
 from capabilities.response import CapabilityResponse
 from handlers.window_handler import (
     handle_focus_window, handle_maximize_window, handle_minimize_window, 
-    handle_restore_window, handle_toggle_minimize, handle_move_window, handle_resize_window
+    handle_restore_window, handle_toggle_minimize, handle_move_window, handle_resize_window,
+    handle_close_window
 )
 from handlers.app_handler import handle_open_application, handle_close_application
 
@@ -45,15 +46,33 @@ class WindowCapability(BaseCapability):
         return True
 
     def execute(self, parsed: ParsedCommand, context: Dict[str, Any]) -> CapabilityResponse:
+        # Check for ResolvedWindowTarget and handle immediately if lookup failed
+        if isinstance(parsed.target, ResolvedWindowTarget) and parsed.target.error_code:
+            err = parsed.target.error_code
+            if parsed.verb != "close":
+                reply = f"Window '{parsed.object}' was not found." if err == "WINDOW_NOT_FOUND" else f"Unable to {parsed.verb} window."
+                return CapabilityResponse(
+                    status="error",
+                    reply=reply,
+                    payload={"error_code": err, "window_name": parsed.object},
+                    verification_result=False
+                )
+
         target_name = None
-        if isinstance(parsed.target, WindowReference):
+        entities = dict(parsed.entities)
+
+        if isinstance(parsed.target, ResolvedWindowTarget):
+            target_name = parsed.target.title
+            entities["window_handle"] = parsed.target.hwnd
+            entities["window_name"] = parsed.target.title
+            entities["app_name"] = parsed.target.application
+        elif isinstance(parsed.target, WindowReference):
             target_name = parsed.target.window_name
         elif isinstance(parsed.target, ApplicationReference):
             target_name = parsed.target.app_name
         elif isinstance(parsed.target, ReferenceWrapper):
             target_name = parsed.target.value
         
-        entities = dict(parsed.entities)
         if target_name:
             target_name_clean = target_name.lower()
             entities["app_name"] = target_name_clean
@@ -79,7 +98,10 @@ class WindowCapability(BaseCapability):
                 }
                 verification_result = True
         elif parsed.verb == "close":
-            res = handle_close_application(entities, context)
+            if entities.get("window_handle") is not None:
+                res = handle_close_window(entities, context)
+            else:
+                res = handle_close_application(entities, context)
             if res.get("status") == "success":
                 app_name = entities.get("app_name", "").lower()
                 context_updates = {
