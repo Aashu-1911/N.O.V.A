@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Callable
 from core.execution_context import ExecutionContext
 from core.context_history import ContextHistory, HistoryEntry
 from core.context_events import ContextEventDispatcher, ContextEvent
+from core.context_engine.engine import ContextEngine
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,7 @@ class ExecutionContextManager:
         self._context = ExecutionContext()
         self._history = ContextHistory(max_size=max_history_size)
         self._dispatcher = ContextEventDispatcher()
+        self._engine = ContextEngine()
 
     # Query APIs
     def get_current_application(self) -> Optional[str]:
@@ -203,6 +205,32 @@ class ExecutionContextManager:
             # Log and event firing
             self._log_context_update()
 
+            # Sync events to ContextEngine
+            self._engine.dispatcher.dispatch("COMMAND_EXECUTED", {
+                "command": command,
+                "intent": intent,
+                "entities": entities,
+                "handler": handler_name,
+                "execution_time": execution_time,
+                "parent_command": parent_command
+            })
+            
+            if target_val:
+                if intent == "open_application":
+                    self._engine.dispatcher.dispatch("APPLICATION_STARTED", {"app_name": target_val})
+                elif intent == "close_application":
+                    self._engine.dispatcher.dispatch("APPLICATION_CLOSED", {"app_name": target_val})
+                elif intent == "open_website":
+                    self._engine.dispatcher.dispatch("URL_OPENED", {"url": target_val})
+                elif intent == "search_web":
+                    self._engine.dispatcher.dispatch("SEARCH_PERFORMED", {"query": target_val})
+                elif intent in ["focus_window", "maximize_window", "minimize_window", "restore_window"]:
+                    self._engine.dispatcher.dispatch("WINDOW_FOCUSED", {
+                        "window_handle": payload.get("window_handle"),
+                        "window_title": payload.get("window_title"),
+                        "operation": intent.replace("_window", "")
+                    })
+
     def update_from_failure(
         self,
         command: str,
@@ -252,6 +280,17 @@ class ExecutionContextManager:
             self._context.request_id = None
 
             self._log_context_update()
+
+            # Sync failure to ContextEngine
+            self._engine.dispatcher.dispatch("COMMAND_FAILED", {
+                "command": command,
+                "intent": intent,
+                "entities": entities,
+                "handler": handler_name,
+                "execution_time": execution_time,
+                "parent_command": parent_command,
+                "error": error_msg
+            })
 
     def to_dict(self) -> Dict[str, Any]:
         with self._lock:
